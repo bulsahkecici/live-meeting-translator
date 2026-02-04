@@ -1,0 +1,22 @@
+# Core dependencies - pinned for stability
+numpy==1.24.3
+sounddevice==0.4.6
+requests==2.31.0
+python-dotenv==1.0.0
+pyyaml==6.0.1
+cachetools==5.3.2
+
+# STT
+faster-whisper==1.2.1
+av==14.0.1
+
+# VAD (has Windows wheels; import name stays `webrtcvad`)
+webrtcvad-wheels==2.0.14
+
+# TTS (optional - Edge TTS for natural voices, SAPI is default)
+edge-tts>=7.2.0
+pydub>=0.25.1  # For MP3 to WAV conversion in edge-tts
+
+# GUI & Utils
+PyQt6>=6.6.0
+noisereduce>=3.0.0

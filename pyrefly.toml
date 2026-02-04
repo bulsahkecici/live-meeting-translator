@@ -1,0 +1,19 @@
+# Sadece kendi kaynak kodunu tara (LSP'nin 2000 dosya taramasını keser)
+project-includes = ["src"]
+
+# Gereksiz / büyük klasörleri ve cache'leri dışla
+project-excludes = [
+  "**/.git/**",
+  "**/node_modules/**",
+  "**/.venv/**",
+  "**/venv/**",
+  "**/__pycache__/**",
+  "**/.pytest_cache/**",
+  "**/.ruff_cache/**",
+  "**/.mypy_cache/**",
+  "**/build/**",
+  "**/dist/**",
+  "**/logs/**"
+]
+
+search-path = ["src"]

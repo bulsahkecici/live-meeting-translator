@@ -1,0 +1,94 @@
+# Audio device configuration
+audio:
+  # Input device (microphone) - matched by substring or explicit index
+  input:
+    name_substring: ""  # e.g., "Microphone" or "USB Audio"
+    index_override: null  # Optional: explicit device index
+    # sample_rate: 16000  # Optional: per-device sample rate (new format)
+  
+  # Output device (virtual cable) - matched by substring or explicit index
+  output:
+    name_substring: "CABLE Input"  # VB-Audio Virtual Cable input
+    index_override: null  # Optional: explicit device index
+    # sample_rate: 48000  # Optional: per-device sample rate (new format)
+  
+  # Sample rates (legacy format - also supported for backward compatibility)
+  # Note: If both formats are present, per-device sample_rate takes precedence
+  input_sample_rate: 16000  # STT works best at 16kHz (legacy format)
+  output_sample_rate: 48000  # Zoom-friendly 48kHz (legacy format)
+
+# VAD (Voice Activity Detection) settings
+vad:
+  frame_duration_ms: 30
+  # Silence threshold (both formats supported for backward compatibility)
+  silence_threshold_ms: 600  # End segment after this silence (preferred)
+  # silence_ms: 600  # Legacy format (also supported)
+  
+  # Minimum speech duration (both formats supported)
+  min_speech_duration_ms: 800  # Minimum speech length to process (preferred)
+  # min_speech_ms: 800  # Legacy format (also supported)
+  
+  # Maximum segment duration (both formats supported)
+  max_segment_duration_ms: 8000  # Maximum segment length (8 seconds) (preferred)
+  # max_segment_ms: 8000  # Legacy format (also supported)
+  
+  aggressiveness: 2  # 0-3, higher = more aggressive
+
+# STT (Speech-to-Text) settings
+stt:
+  model: "small"  # tiny, base, small, medium, large
+  compute_type: "int8"  # int8, float16, float32
+  device: "cpu"  # cpu or cuda (auto-detected if cuda available)
+  language: "tr"  # Turkish
+  beam_size: 1  # Lower = faster, higher = more accurate
+
+# Translation settings
+translate:
+  source_lang: "TR"
+  target_lang: "EN"
+  cache_size: 128  # LRU cache entries
+  timeout_seconds: 10
+  retry_max_attempts: 3
+  retry_backoff: [0.5, 1.0, 2.0, 4.0]  # seconds
+
+# TTS (Text-to-Speech) settings
+tts:
+  engine: "sapi"  # sapi, edge, or clone
+  sample_rate: 48000
+  channels: 1  # mono
+  
+  # SAPI settings (Windows built-in)
+  sapi:
+    voice_substring: ""  # Optional: match voice by name substring
+    # If empty, uses system default
+  
+  # Edge TTS settings (requires edge-tts Python package)
+  edge:
+    voice: "en-US-AriaNeural"  # Default English voice (or en-US-GuyNeural for male)
+    rate: "+0%"
+    pitch: "+0Hz"
+  
+  # Voice cloning settings (placeholder for future)
+  clone:
+    sample_wav_path: ""  # Path to reference audio for cloning
+    model_name: "xtts-v2"  # Placeholder
+    language: "en"
+
+# Logging settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/app.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
+
+# Pipeline settings
+pipeline:
+  # Buffer sizes
+  audio_buffer_size: 4800  # ~300ms at 16kHz
+  vad_buffer_size: 100  # frames
+  
+  # Timeouts
+  stt_timeout_seconds: 30
+  translate_timeout_seconds: 10
+  tts_timeout_seconds: 15
+

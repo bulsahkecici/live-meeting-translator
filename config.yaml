@@ -1,0 +1,48 @@
+﻿audio:
+  input:
+    name_substring: "Mikrofon"
+    index_override: null
+  output:
+    name_substring: "CABLE Input"
+    index_override: null
+  input_sample_rate: 16000
+  output_sample_rate: 48000
+
+vad:
+  frame_duration_ms: 30
+  silence_threshold_ms: 600
+  min_speech_duration_ms: 800
+  max_segment_duration_ms: 8000
+  aggressiveness: 2
+
+stt:
+  model: "small"
+  compute_type: "float32"
+  device: "cuda"
+  language: "tr"
+  beam_size: 1
+
+translate:
+  source_lang: "TR"
+  target_lang: "EN"
+  cache_size: 128
+  timeout_seconds: 10
+  retry_max_attempts: 3
+  retry_backoff: [0.5, 1.0, 2.0, 4.0]
+
+tts:
+  engine: "edge"
+  sample_rate: 48000
+  channels: 1
+  sapi:
+    voice_substring: ""
+  edge:
+    voice: "en-US-GuyNeural"
+    rate: "+0%"
+    pitch: "+0Hz"
+
+logging:
+  level: "INFO"
+  file: "logs/app.log"
+  max_bytes: 10485760
+  backup_count: 5
