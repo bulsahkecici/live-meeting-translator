@@ -5,10 +5,12 @@ import logging
 import queue
 from typing import Callable, Optional
 
+from .backend_interfaces import AudioInputBackend
+
 logger = logging.getLogger(__name__)
 
 
-class AudioInput:
+class AudioInput(AudioInputBackend):
     """Manages audio input stream with callback-based capture."""
     
     def __init__(
@@ -172,3 +174,6 @@ class AudioInput:
             except queue.Empty:
                 break
 
+    def queue_size(self) -> int:
+        """Return the current queue depth without exposing queue internals."""
+        return self._queue.qsize()

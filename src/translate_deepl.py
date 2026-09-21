@@ -5,10 +5,12 @@ import time
 from typing import Optional
 from cachetools import LRUCache
 
+from .backend_interfaces import TranslatorBackend
+
 logger = logging.getLogger(__name__)
 
 
-class DeepLTranslator:
+class DeepLTranslator(TranslatorBackend):
     """DeepL API translator with retry logic and caching."""
     
     def __init__(
@@ -162,4 +164,3 @@ class DeepLTranslator:
                 return None
         
         return None
-

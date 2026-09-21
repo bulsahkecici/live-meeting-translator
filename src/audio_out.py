@@ -6,10 +6,12 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from .backend_interfaces import AudioOutputBackend
+
 logger = logging.getLogger(__name__)
 
 
-class AudioOutput:
+class AudioOutput(AudioOutputBackend):
     """Manages audio output stream for playing WAV files."""
     
     def __init__(
@@ -178,4 +180,3 @@ class AudioOutput:
         except Exception as e:
             logger.error(f"Error playing beep: {e}", exc_info=True)
             return False
-

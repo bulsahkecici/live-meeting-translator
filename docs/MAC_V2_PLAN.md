@@ -91,7 +91,21 @@ The final Phase 1 continuation reran `python -m src.devices`, `./scripts/diagnos
 
 **Risks:** Over-generalized interfaces, constructor side effects, configuration drift, and accidental fallback changes.
 
-**Status:** PENDING
+**Status:** COMPLETE
+
+### Phase 3 implementation record (2026-09-21)
+
+**IMPLEMENTED NOW:** `backend_interfaces.py` defines ABC contracts for the exact STT, translator, audio-input, and audio-output operations consumed by the pipeline. Existing `STTWhisper`, `DeepLTranslator`, `AudioInput`, and `AudioOutput` implement those contracts, while the existing `TTSEngine` ABC remains the single TTS abstraction. `backend_factory.py` maps configuration to the existing faster-whisper, DeepL, SAPI, Edge, clone-stub, sounddevice, and VAD implementations through function-local imports. `PipelineComponents` provides complete constructor injection, and normal `TranslationPipeline(config)` startup still builds the same components automatically in the legacy order.
+
+Existing configuration remains compatible when `stt.backend` and `translate.backend` are absent; their internal defaults are `faster-whisper` and `deepl`. Existing audio sample-rate and VAD compatibility keys remain accepted, and `tts.engine` keeps its existing values. `config.yaml` was not changed. The example documents only currently implemented selectors.
+
+`runtime_platform.py` now exposes deterministic OS, Apple Silicon, SAPI, CUDA-relevance, and virtual-routing facts without overriding configured device names. Windows keeps the existing unavailable-TTS-to-SAPI fallback. Non-Windows startup now rejects explicit SAPI selection or an unavailable engine's invalid SAPI fallback with a clear error.
+
+Import boundaries are lighter: `TranslationPipeline` no longer imports concrete AI/TTS backends, factory imports are lazy, and `src.main` handles device listing before importing configuration or pipeline modules. Deterministic tests use injected fakes and patched constructors; they do not access microphones, virtual devices, networks, model downloads, CUDA, MLX, Edge service, or SAPI.
+
+The serial stage order, blocking playback, `run_live()` loop, queue overflow policy, and both existing queue-clearing behaviors are unchanged. Phase 3 does not address captured-speech loss or concurrency.
+
+**FUTURE BACKENDS — NOT IMPLEMENTED:** MLX Whisper, local/hybrid LLM translation, and local/streaming TTS remain later-phase candidates. No new AI dependency or model was added.
 
 ## PHASE 4 — Apple Silicon STT
 

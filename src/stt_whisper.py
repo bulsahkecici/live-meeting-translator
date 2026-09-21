@@ -4,6 +4,8 @@ import numpy as np
 from typing import Optional
 from faster_whisper import WhisperModel
 
+from .backend_interfaces import SpeechToTextBackend
+
 # Optional torch import for CUDA detection (not required for faster-whisper)
 try:
     import torch
@@ -15,7 +17,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class STTWhisper:
+class STTWhisper(SpeechToTextBackend):
     """Speech-to-Text using faster-whisper."""
     
     def __init__(
@@ -178,4 +180,3 @@ class STTWhisper:
         except Exception as e:
             logger.error(f"STT transcription error: {e}", exc_info=True)
             return None
-

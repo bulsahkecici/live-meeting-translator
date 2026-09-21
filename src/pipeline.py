@@ -1,8 +1,6 @@
 """Main translation pipeline."""
 import logging
 import time
-from pathlib import Path
-from typing import Optional
 import numpy as np
 try:
     import noisereduce as nr
@@ -10,17 +8,7 @@ try:
 except ImportError:
     NOISE_REDUCE_AVAILABLE = False
 
-
-from .audio_in import AudioInput
-from .audio_out import AudioOutput
-from .vad import VAD
-from .stt_whisper import STTWhisper
-from .translate_deepl import DeepLTranslator
-from .tts_base import TTSEngine
-from .tts_sapi import SapiTTSEngine
-from .tts_edge import EdgeTTSEngine
-from .tts_clone_stub import CloneTTSEngineStub
-from .config import Config
+from .backend_factory import PipelineComponents, create_pipeline_components
 from .utils import get_tmp_dir
 
 logger = logging.getLogger(__name__)
@@ -29,183 +17,22 @@ logger = logging.getLogger(__name__)
 class TranslationPipeline:
     """Main translation pipeline orchestrating all components."""
     
-    def __init__(self, config: Config):
-        """Initialize pipeline with configuration."""
+    def __init__(self, config, components: PipelineComponents = None):
+        """Initialize from config or a complete injected component bundle."""
         self.config = config
         self.tmp_dir = get_tmp_dir()
-        
-        # Initialize components
-        self._init_audio()
-        self._init_vad()
-        self._init_stt()
-        self._init_translator()
-        self._init_tts()
+
+        if components is None:
+            components = create_pipeline_components(config)
+
+        self.audio_input = components.audio_input
+        self.audio_output = components.audio_output
+        self.vad = components.vad
+        self.stt = components.stt
+        self.translator = components.translator
+        self.tts = components.tts
         
         logger.info("Translation pipeline initialized")
-    
-    def _init_audio(self):
-        """Initialize audio input and output."""
-        from .devices import find_device
-        
-        # Input device
-        input_config = self.config.audio_input
-        audio_config = self.config.get('audio', {})
-        
-        input_idx = find_device(
-            name_substring=input_config.get('name_substring', ''),
-            index_override=input_config.get('index_override'),
-            is_input=True
-        )
-        
-        if input_idx is None:
-            raise RuntimeError("Could not find audio input device")
-        
-        # Compat: Try new format first, then old format, then default
-        input_sr = (
-            input_config.get('sample_rate') or
-            audio_config.get('input_sample_rate') or
-            16000
-        )
-        
-        self.audio_input = AudioInput(
-            device_index=input_idx,
-            sample_rate=input_sr,
-            channels=1,
-            dtype='int16',
-            blocksize=self.config.pipeline_config.get('audio_buffer_size', 4800)
-        )
-        
-        # Output device
-        output_config = self.config.audio_output
-        output_idx = find_device(
-            name_substring=output_config.get('name_substring', 'CABLE Input'),
-            index_override=output_config.get('index_override'),
-            is_input=False
-        )
-        
-        if output_idx is None:
-            raise RuntimeError("Could not find audio output device")
-        
-        # Compat: Try new format first, then old format, then default
-        output_sr = (
-            output_config.get('sample_rate') or
-            audio_config.get('output_sample_rate') or
-            48000
-        )
-        
-        self.audio_output = AudioOutput(
-            device_index=output_idx,
-            sample_rate=output_sr,
-            channels=1,
-            dtype='int16'
-        )
-        
-        # Log effective config
-        logger.info(
-            f"Effective audio config: input={input_sr}Hz, output={output_sr}Hz"
-        )
-    
-    def _init_vad(self):
-        """Initialize VAD."""
-        vad_config = self.config.vad_config
-        
-        # Compat: Support both new and old key names
-        silence_ms = (
-            vad_config.get('silence_threshold_ms') or
-            vad_config.get('silence_ms') or
-            600
-        )
-        min_speech_ms = (
-            vad_config.get('min_speech_duration_ms') or
-            vad_config.get('min_speech_ms') or
-            800
-        )
-        max_segment_ms = (
-            vad_config.get('max_segment_duration_ms') or
-            vad_config.get('max_segment_ms') or
-            8000
-        )
-        
-        self.vad = VAD(
-            sample_rate=self.audio_input.sample_rate,
-            frame_duration_ms=vad_config.get('frame_duration_ms', 30),
-            silence_threshold_ms=silence_ms,
-            min_speech_duration_ms=min_speech_ms,
-            max_segment_duration_ms=max_segment_ms,
-            aggressiveness=vad_config.get('aggressiveness', 2)
-        )
-        
-        # Log effective VAD config
-        logger.info(
-            f"Effective VAD config: silence={silence_ms}ms, "
-            f"min_speech={min_speech_ms}ms, max_segment={max_segment_ms}ms"
-        )
-    
-    def _init_stt(self):
-        """Initialize STT."""
-        stt_config = self.config.stt_config
-        self.stt = STTWhisper(
-            model=stt_config.get('model', 'small'),
-            compute_type=stt_config.get('compute_type', 'int8'),
-            device=stt_config.get('device', 'cpu'),
-            language=stt_config.get('language', 'tr'),
-            beam_size=stt_config.get('beam_size', 1)
-        )
-    
-    def _init_translator(self):
-        """Initialize translator."""
-        if not self.config.deepl_api_key:
-            raise RuntimeError("DeepL API key not configured")
-        
-        translate_config = self.config.translate_config
-        self.translator = DeepLTranslator(
-            api_key=self.config.deepl_api_key,
-            source_lang=translate_config.get('source_lang', 'TR'),
-            target_lang=translate_config.get('target_lang', 'EN'),
-            cache_size=translate_config.get('cache_size', 128),
-            timeout_seconds=translate_config.get('timeout_seconds', 10),
-            retry_max_attempts=translate_config.get('retry_max_attempts', 3),
-            retry_backoff=translate_config.get('retry_backoff', [0.5, 1.0, 2.0, 4.0])
-        )
-    
-    def _init_tts(self):
-        """Initialize TTS engine based on config."""
-        tts_config = self.config.tts_config
-        engine_name = tts_config.get('engine', 'sapi').lower()
-        
-        if engine_name == 'sapi':
-            sapi_config = tts_config.get('sapi', {})
-            self.tts = SapiTTSEngine(
-                voice_substring=sapi_config.get('voice_substring', ''),
-                sample_rate=tts_config.get('sample_rate', 48000)
-            )
-        elif engine_name == 'edge':
-            edge_config = tts_config.get('edge', {})
-            self.tts = EdgeTTSEngine(
-                voice=edge_config.get('voice', 'en-US-AriaNeural'),
-                rate=edge_config.get('rate', '+0%'),
-                pitch=edge_config.get('pitch', '+0Hz'),
-                sample_rate=tts_config.get('sample_rate', 48000)
-            )
-        elif engine_name == 'clone':
-            clone_config = tts_config.get('clone', {})
-            self.tts = CloneTTSEngineStub(
-                sample_wav_path=clone_config.get('sample_wav_path', ''),
-                model_name=clone_config.get('model_name', 'xtts-v2'),
-                language=clone_config.get('language', 'en'),
-                sample_rate=tts_config.get('sample_rate', 48000)
-            )
-        else:
-            raise ValueError(f"Unknown TTS engine: {engine_name}")
-        
-        if not self.tts.is_available():
-            logger.warning(
-                f"TTS engine '{engine_name}' not available. "
-                "Falling back to SAPI."
-            )
-            self.tts = SapiTTSEngine(
-                sample_rate=tts_config.get('sample_rate', 48000)
-            )
     
     def process_segment(self, audio_bytes: bytes) -> bool:
         """
@@ -221,7 +48,7 @@ class TranslationPipeline:
         
         # Clear audio input queue backlog before processing to prevent latency buildup
         # This ensures we process recent speech, not old buffered audio
-        queue_size_before = self.audio_input._queue.qsize()
+        queue_size_before = self.audio_input.queue_size()
         if queue_size_before > 50:  # If queue has significant backlog
             self.audio_input.clear_queue()
             logger.debug(f"Cleared audio queue backlog ({queue_size_before} chunks)")
@@ -465,4 +292,3 @@ class TranslationPipeline:
         logger.info("Beep mode: generating 440Hz beep")
         print("\nPlaying 440Hz beep for 0.5 seconds...")
         self.audio_output.play_beep(frequency=440.0, duration=0.5, blocking=True)
-

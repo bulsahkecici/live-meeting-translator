@@ -2,12 +2,6 @@
 import sys
 import argparse
 import logging
-from pathlib import Path
-
-from .config import Config
-from .utils import setup_logging
-from .pipeline import TranslationPipeline
-from .devices import print_device_list
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +34,13 @@ def main():
     
     # List devices mode (no config needed)
     if args.mode == 'list-devices':
+        from .devices import print_device_list
         print_device_list()
         return 0
+
+    from .config import Config
+    from .pipeline import TranslationPipeline
+    from .utils import setup_logging
     
     # Load configuration
     try:
@@ -132,4 +131,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

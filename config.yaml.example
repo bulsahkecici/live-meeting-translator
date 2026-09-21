@@ -36,6 +36,7 @@ vad:
 
 # STT (Speech-to-Text) settings
 stt:
+  backend: "faster-whisper"  # Current implementation; "whisper" alias also accepted
   model: "small"  # tiny, base, small, medium, large
   compute_type: "int8"  # int8, float16, float32
   device: "cpu"  # cpu or cuda (auto-detected if cuda available)
@@ -44,6 +45,7 @@ stt:
 
 # Translation settings
 translate:
+  backend: "deepl"  # Current implementation
   source_lang: "TR"
   target_lang: "EN"
   cache_size: 128  # LRU cache entries
@@ -91,4 +93,3 @@ pipeline:
   stt_timeout_seconds: 30
   translate_timeout_seconds: 10
   tts_timeout_seconds: 15
-
