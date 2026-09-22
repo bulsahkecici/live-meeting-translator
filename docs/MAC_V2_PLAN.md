@@ -1,8 +1,9 @@
 # macOS V2 Migration Plan
 
-Statuses use `COMPLETE` or `PENDING`. Phases 0–4 are complete: repository
+Statuses use `COMPLETE` or `PENDING`. Phases 0–5 are complete: repository
 scaffolding, the macOS bootstrap and audio-routing baselines, backend abstraction,
-and measured Apple Silicon MLX Whisper support. Later phases remain unimplemented.
+measured Apple Silicon MLX Whisper support, and bounded pipeline workers. Later
+phases remain unimplemented.
 
 ## PHASE 0 — Codex/repository development scaffolding
 
@@ -193,7 +194,48 @@ ignored and uncommitted.
 
 **Risks:** Races, deadlocks, unbounded latency, out-of-order output, unsafe callbacks, and memory growth.
 
-**Status:** PENDING
+**Status:** COMPLETE
+
+### Phase 5 implementation and evidence (2026-09-22)
+
+`PipelineRuntime` carries sequence-numbered messages through one worker each for
+STT, translation, TTS, and playback. Every stage has a bounded FIFO queue; one
+worker per stage preserves output order while allowing different segments to
+overlap. The synchronous `process_segment()` path remains available for direct
+callers, but `run_live()` continuously consumes capture/VAD input and submits
+segments to the worker chain. Blocking audio playback is isolated to the final
+worker.
+
+The default stage capacity is four. Internal stages use blocking backpressure.
+If the ingress queue remains full for the configured two-second timeout, the
+pipeline raises `PipelineBackpressureError` and stops instead of deleting an
+accepted segment. After capture stops, the current segment is retried ahead of
+remaining captured/VAD data using the single overall shutdown deadline. The
+submit/sentinel lifecycle is locked so a concurrent submit cannot land behind
+the sentinel. The PortAudio callback preserves older queued chunks if its
+raw queue saturates, counts and logs the rejected current chunk, and the live
+loop stops as soon as it observes that continuity breach. The two former
+pipeline `clear_queue()` calls are removed.
+
+Normal shutdown stops capture, consumes raw chunks already accepted by the
+capture queue, flushes VAD, propagates a sentinel after accepted segments, and
+joins all workers. Explicit `stop(cancel=True)` records cancellation instead of
+pretending pending work completed. Stage/backend failures are associated with a
+sequence and do not deadlock later work. Temporary TTS files are removed on
+success, failure, and cancellation. A thread-safe stop event prevents a GUI stop
+request during device startup from being overwritten, and the GUI stop action
+does not synchronously wait on the event loop while queues drain.
+
+Runtime metrics expose submitted/completed/failed/canceled/overload counts,
+current and high-water queue depth, per-stage total time and completion count,
+capture rejections, the last completed sequence, and last
+segmentation-to-playback end-to-end time.
+Deterministic tests cover ordered multi-item playback, bounded saturation with
+no eviction, stage failure containment, observer failure containment,
+drain/cancel shutdown, capture-queue overflow policy, temp cleanup, and the
+legacy synchronous injection path. No live DeepL/Edge/SAPI meeting run or
+sustained thermal/load benchmark was performed in this phase, so Phase 5 makes
+no measured end-to-end latency claim.
 
 ## PHASE 6 — local/streaming TTS
 
@@ -267,13 +309,14 @@ ignored and uncommitted.
 
 ## Architecture Decision Log
 
-These are candidates for later evidence-based decisions, not accepted ADRs.
+Decisions move from candidate to accepted only after the relevant phase records
+implementation and deterministic or measured evidence.
 
-| ID | Candidate decision | Status | Evidence needed |
+| ID | Decision | Status | Evidence |
 | --- | --- | --- | --- |
-| ADR-CANDIDATE-001 | Preserve Windows backends while adding macOS implementations. | Candidate | Interface design and Windows regression coverage |
-| ADR-CANDIDATE-002 | Introduce backend interfaces before replacing STT. | Candidate | Current coupling map and contract tests |
-| ADR-CANDIDATE-003 | Avoid a synchronous monolithic pipeline in V2. | Candidate | Stage timing, queue-depth, and continuity measurements |
+| ADR-CANDIDATE-001 | Preserve Windows backends while adding macOS implementations. | Accepted | Phase 3–5 interfaces, lazy selection, and platform regression tests |
+| ADR-CANDIDATE-002 | Introduce backend interfaces before replacing STT. | Accepted | Phase 3 contract/factory injection and Phase 4 backend implementation |
+| ADR-CANDIDATE-003 | Avoid a synchronous monolithic pipeline in V2. | Accepted | Phase 5 bounded workers, queue/timing metrics, continuity and lifecycle tests |
 | ADR-CANDIDATE-004 | Prefer stable audio device identity/name matching over stored indexes. | Candidate | CoreAudio and Windows device-enumeration trials |
-| ADR-CANDIDATE-005 | Select Apple Silicon STT only after Turkish quality/latency comparison. | Candidate | Reproducible MLX/whisper.cpp/faster-whisper benchmarks |
+| ADR-CANDIDATE-005 | Select Apple Silicon STT only after Turkish quality/latency comparison. | Accepted | Phase 4 same-corpus Faster/MLX small parity and MLX Turbo measurements |
 | ADR-CANDIDATE-006 | Keep local LLM translation optional with explicit fallback. | Candidate | Quality, latency, privacy, and resource measurements |

@@ -174,7 +174,7 @@ class PipelineInjectionTests(unittest.TestCase):
             ],
         )
 
-    def test_existing_process_segment_backlog_clear_is_preserved(self):
+    def test_process_segment_no_longer_clears_capture_backlog(self):
         calls = []
         audio_input = FakeAudioInput(queued_chunks=51)
         components = PipelineComponents(
@@ -192,9 +192,9 @@ class PipelineInjectionTests(unittest.TestCase):
             pipeline = TranslationPipeline(FakeConfig(), components=components)
             self.assertTrue(pipeline.process_segment(b"pcm"))
 
-        self.assertEqual(audio_input.cleared, 1)
+        self.assertEqual(audio_input.cleared, 0)
 
-    def test_existing_run_live_post_segment_clear_is_preserved(self):
+    def test_run_live_uses_workers_without_clearing_capture_backlog(self):
         calls = []
         audio_input = FakeAudioInput(chunks=[b"chunk"])
         components = PipelineComponents(
@@ -211,17 +211,21 @@ class PipelineInjectionTests(unittest.TestCase):
         ):
             pipeline = TranslationPipeline(FakeConfig(), components=components)
 
-            def process_and_stop(segment):
-                pipeline.stop()
-                return True
+            original_transcribe = pipeline.stt.transcribe
 
-            pipeline.process_segment = Mock(side_effect=process_and_stop)
+            def transcribe_and_stop(audio_bytes, sample_rate=16000):
+                result = original_transcribe(audio_bytes, sample_rate)
+                pipeline.stop()
+                return result
+
+            pipeline.stt.transcribe = Mock(side_effect=transcribe_and_stop)
             pipeline.run_live()
 
-        pipeline.process_segment.assert_called_once_with(b"segment")
-        self.assertEqual(audio_input.cleared, 1)
+        pipeline.stt.transcribe.assert_called_once_with(b"segment", 16000)
+        self.assertEqual(audio_input.cleared, 0)
         self.assertTrue(audio_input.started)
         self.assertTrue(audio_input.stopped)
+        self.assertEqual(pipeline.runtime_metrics()["completed"], 1)
 
 
 class BackendFactoryTests(unittest.TestCase):

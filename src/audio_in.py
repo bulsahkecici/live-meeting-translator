@@ -45,6 +45,7 @@ class AudioInput(AudioInputBackend):
         # ~100-300 chunks: ~100 chunks = ~30s at 16kHz with 4800 block size
         queue_maxsize = 200
         self._queue: queue.Queue = queue.Queue(maxsize=queue_maxsize)
+        self._dropped_chunks = 0
         
         # Verify device
         device_info = sd.query_devices(device_index)
@@ -77,33 +78,18 @@ class AudioInput(AudioInputBackend):
                 indata = indata[:, 0:1]
             audio_bytes = indata.tobytes()
         
-        # Enqueue with backpressure handling: drop oldest if queue is full
+        # Preserve already queued speech. A saturated callback cannot block, so
+        # reject the current chunk visibly and expose the count to the pipeline.
         try:
             self._queue.put_nowait(audio_bytes)
         except queue.Full:
-            # Queue is full - drop oldest chunk(s) to make room
-            dropped = 0
-            while not self._queue.empty() and dropped < 10:  # Drop up to 10 old chunks
-                try:
-                    self._queue.get_nowait()
-                    dropped += 1
-                except queue.Empty:
-                    break
-            
-            # Now try to put the new chunk
-            try:
-                self._queue.put_nowait(audio_bytes)
-                if dropped > 0:
-                    logger.debug(
-                        f"Audio queue full, dropped {dropped} old chunk(s) "
-                        f"(queue size: {self._queue.qsize()})"
-                    )
-            except queue.Full:
-                # Still full after dropping - log warning but don't crash
-                logger.warning(
-                    f"Audio queue still full after dropping chunks, "
-                    f"skipping current chunk (queue size: {self._queue.qsize()})"
-                )
+            self._dropped_chunks += 1
+            logger.error(
+                "Audio capture queue full; rejected current chunk without "
+                "evicting older speech (dropped=%s, queue size=%s)",
+                self._dropped_chunks,
+                self._queue.qsize(),
+            )
         
         # User callback if provided
         if self.callback:
@@ -177,3 +163,7 @@ class AudioInput(AudioInputBackend):
     def queue_size(self) -> int:
         """Return the current queue depth without exposing queue internals."""
         return self._queue.qsize()
+
+    def dropped_chunk_count(self) -> int:
+        """Return capture chunks rejected because the bounded queue was full."""
+        return self._dropped_chunks

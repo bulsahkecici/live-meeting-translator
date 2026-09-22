@@ -49,6 +49,10 @@ class AudioInputBackend(ABC):
     def queue_size(self) -> int:
         """Return the number of captured chunks currently queued."""
 
+    def dropped_chunk_count(self) -> int:
+        """Return visibly rejected capture chunks, when tracked by the backend."""
+        return 0
+
 
 class AudioOutputBackend(ABC):
     """Audio-output operations required by ``TranslationPipeline``."""

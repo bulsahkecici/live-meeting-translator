@@ -116,6 +116,13 @@ RTF 1 and its approximately 1.855 GB peak process RSS was acceptable on this
 
 ## End-to-end
 
+Phase 5 adds monotonic per-stage and segmentation-to-playback timing plus queue
+depth/high-water and continuity counters to the live runtime. Deterministic fake
+stage tests validate concurrency, ordering, bounded saturation, failure
+containment, and shutdown; they are correctness evidence, not performance
+measurements. A real DeepL/Edge/SAPI meeting run has not yet been measured, so no
+latency row is added here.
+
 | Segment duration | STT | Translation | TTS first audio | TTS total | Playback start | End-to-end perceived latency | Dropped audio | Notes |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
 | | | | | | | | | |

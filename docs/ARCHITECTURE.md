@@ -1,10 +1,10 @@
 # Architecture
 
-## CURRENT ARCHITECTURE — PHASE 4
+## CURRENT ARCHITECTURE — PHASE 5
 
-This section describes the code currently present in `src/`. Phase 4 adds an
-explicit Apple Silicon MLX Whisper implementation behind the Phase 3 STT
-boundary while preserving the synchronous pipeline and Faster Whisper default.
+This section describes the code currently present in `src/`. Phase 5 keeps the
+Phase 4 backend choices while moving the live STT, translation, TTS, and
+playback stages onto an ordered bounded worker chain.
 
 ### Current runtime flow
 
@@ -23,11 +23,18 @@ flowchart TD
     Pipeline --> Input
     Input --> CaptureQueue["queue.Queue, maxsize 200"]
     CaptureQueue --> VAD["WebRTC VAD segmentation"]
-    VAD --> Noise["Optional noisereduce"]
-    Noise --> STT
-    STT --> DeepL
-    DeepL --> TTS
-    TTS --> WAV["Temporary WAV"]
+    VAD --> STTQueue["Bounded STT queue"]
+    STTQueue --> STTWorker["STT worker + optional noisereduce"]
+    STTWorker --> STT
+    STT --> TranslationQueue["Bounded translation queue"]
+    TranslationQueue --> TranslationWorker["Translation worker"]
+    TranslationWorker --> DeepL
+    DeepL --> TTSQueue["Bounded TTS queue"]
+    TTSQueue --> TTSWorker["TTS worker"]
+    TTSWorker --> TTS
+    TTS --> PlaybackQueue["Bounded playback queue"]
+    PlaybackQueue --> PlaybackWorker["Playback worker"]
+    PlaybackWorker --> WAV["Temporary WAV"]
     WAV --> Output["AudioOutput / sounddevice blocking playback"]
     Output --> Cable["Configured output device, Windows default: CABLE Input"]
     Cable --> Conference["Conferencing microphone input"]
@@ -35,7 +42,7 @@ flowchart TD
 
 `src/main.py` parses `live`, `gui`, `dryrun`, `test`, `beep`, and `list-devices` modes. Device listing is handled before importing configuration or the pipeline, so it does not load AI or TTS backends. Other modes load configuration, initialize logging, and construct `TranslationPipeline`. GUI mode creates the same pipeline in a `QThread`.
 
-In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunks. The pipeline loop reads chunks, passes them to `VAD`, and calls `process_segment` when a segment completes. That method performs optional noise reduction, STT, translation, TTS file generation, and blocking playback in sequence. No later segment is processed while these stages run.
+In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunks. The pipeline loop continuously reads chunks, passes them to `VAD`, and submits completed segments to `PipelineRuntime`. One worker per stage preserves FIFO order while allowing different segments to occupy STT, translation, TTS, and playback concurrently. `process_segment()` remains as a synchronous compatibility path for direct callers and deterministic tests.
 
 ### Main modules
 
@@ -43,6 +50,7 @@ In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunk
 | --- | --- |
 | `src/main.py` | CLI entry point, mode selection, configuration and logging startup |
 | `src/pipeline.py` | Coordinates injected components for all live/dry-run/test processing |
+| `src/pipeline_runtime.py` | Ordered stage messages, bounded FIFO queues, workers, shutdown, backpressure, and metrics |
 | `src/backend_interfaces.py` | Minimal ABC contracts for STT, translation, audio input, and audio output |
 | `src/backend_factory.py` | Lazily maps compatible configuration to current concrete components |
 | `src/runtime_platform.py` | Pure, testable OS/architecture capabilities and virtual-routing hints |
@@ -65,7 +73,7 @@ In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunk
 
 ### Audio input
 
-`AudioInput` opens a `sounddevice.InputStream` for a selected numeric device index. Its callback converts data to `int16`, keeps only the first channel when input is multichannel, and pushes byte chunks into `queue.Queue(maxsize=200)`. When full, it drops up to ten oldest chunks and may drop the current chunk. Device selection supports an explicit index, a case-insensitive name substring, or the current system default.
+`AudioInput` opens a `sounddevice.InputStream` for a selected numeric device index. Its callback converts data to `int16`, keeps only the first channel when input is multichannel, and pushes byte chunks into `queue.Queue(maxsize=200)`. A PortAudio callback cannot block safely; if this queue is full, it preserves older queued speech, rejects the current chunk, increments a visible counter, and logs an error. The live pipeline detects a new rejection and stops with `PipelineBackpressureError` instead of continuing with an undisclosed continuity gap. Device selection supports an explicit index, a case-insensitive name substring, or the current system default.
 
 ### VAD
 
@@ -95,7 +103,7 @@ TTS retains the existing `TTSEngine` abstract base; no redundant TTS interface w
 
 ### Audio output
 
-`AudioInputBackend` and `AudioOutputBackend` capture the operations the pipeline actually uses. The existing `AudioInput` and `AudioOutput` implementations remain sounddevice-based. `AudioInput.queue_size()` replaces the pipeline's former direct access to its private queue without changing clearing or overflow behavior. `AudioOutput` still reads an entire WAV, converts multichannel input to mono, linearly resamples to the configured device rate, and calls blocking `sounddevice.play`. The existing default still targets `CABLE Input` at 48 kHz for VB-CABLE routing into Zoom.
+`AudioInputBackend` and `AudioOutputBackend` capture the operations the pipeline actually uses. The existing `AudioInput` and `AudioOutput` implementations remain sounddevice-based. `AudioInput.dropped_chunk_count()` exposes callback saturation without exposing queue internals. `clear_queue()` remains on the compatibility interface but the Phase 5 pipeline no longer calls it. `AudioOutput` still reads an entire WAV, converts multichannel input to mono, linearly resamples to the configured device rate, and calls blocking `sounddevice.play`; playback blocking is isolated to its worker. The primary Mac profile targets BlackHole 2ch, while the cross-platform example retains `CABLE Input` for VB-CABLE.
 
 ### GUI
 
@@ -107,15 +115,16 @@ TTS retains the existing `TTSEngine` abstract base; no redundant TTS interface w
 
 ### Error handling
 
-Component initialization generally raises to `main.py`, which logs and exits. Runtime STT, translation, TTS, and playback methods usually log errors and return `None` or `False`. DeepL has bounded retries. The live loop re-raises unexpected exceptions after logging, then flushes VAD and stops input in `finally`. GUI worker exceptions are logged and signaled as completion.
+Component initialization generally raises to `main.py`, which logs and exits. Runtime STT, translation, TTS, and playback methods usually log errors and return `None` or `False`. DeepL has bounded retries. A failed stage marks that segment failed and allows later sequence IDs to continue; callback exceptions are contained so they cannot kill a stage worker. Queue saturation and worker shutdown timeout raise explicitly. Normal stop closes capture, drains queued raw audio and VAD state, then propagates an ordered sentinel through every worker. Explicit cancellation records canceled messages. GUI worker exceptions are logged and signaled as completion.
 
 ### Current concurrency model
 
-- PortAudio/sounddevice invokes the input callback outside the synchronous processing loop.
-- A bounded `queue.Queue` bridges capture and processing.
-- The live pipeline consumes and processes one segment at a time; STT, translation, TTS, and playback are serial and playback is blocking.
-- GUI mode places that same serial pipeline in a single `QThread`; it does not create per-stage workers.
-- Audio captured while a segment is processed accumulates until queue limits or explicit clearing discard it.
+- PortAudio/sounddevice invokes the input callback outside the pipeline loop.
+- The capture queue and all four stage queues are bounded.
+- A single worker per stage preserves sequence order; stages can overlap across different segments.
+- Backpressure blocks between internal stages. Ingress saturation stops capture visibly after a configurable timeout; the rejected current segment is retried during bounded shutdown drain before the sentinel, so accepted speech is not evicted.
+- Normal stop drains; `stop(cancel=True)` visibly cancels queued work. Queue depth/high-water, stage totals/counts, completion/failure/cancel counts, and last end-to-end latency are observable through `runtime_metrics()` and final logs.
+- GUI mode still owns `run_live()` in one `QThread`; the four pipeline workers run beneath it, blocking playback no longer blocks capture/VAD consumption, and the stop button requests shutdown without blocking the Qt event loop.
 
 ### Current platform handling
 
@@ -133,14 +142,15 @@ Remaining platform assumptions are:
 
 ### Known architectural risks
 
-- `process_segment` clears the input queue when backlog exceeds 50 chunks, and `run_live` clears it again after every processed segment. `AudioInput` also drops chunks on queue overflow. Captured speech can therefore be silently lost under load.
-- Serial network/model/synthesis/playback work allows backlog to build during every segment.
+- Capture callbacks must reject the current chunk if their raw queue is completely full; this is visible and stops the live run, but the lost chunk cannot be recovered.
+- Bounded queues cap memory but sustained downstream slowness can deliberately stop ingress rather than degrade continuity silently.
+- A backend call that never returns cannot be force-killed by Python threads; shutdown times out visibly, while the daemon worker may remain until process exit.
+- A GUI stop requested during model/component construction is latched and prevents capture from starting, but it cannot interrupt the constructor already in progress.
 - Component constructors still have observable side effects; the factory preserves the legacy order of device queries, VAD, model loading, DeepL validation, and TTS probing.
 - Device indexes are supported as persistent configuration even though operating systems can reorder them, and substring selection takes the first match.
 - No non-Windows TTS fallback exists; an unavailable engine fails startup explicitly outside Windows.
-- Queue depth and capture-to-playback latency are not recorded as first-class metrics.
 - GUI subtitle updates depend on parsing log text rather than structured events.
-- Automated tests cover the backend contracts, MLX waveform conversion, factory and platform policy, import isolation, Turkish WER/CER logic, and Phase 2 diagnostics. Phase 4 also has one local real-speech benchmark on Apple M5 Max, but no Windows SAPI, translation-network, TTS, or end-to-end meeting validation.
+- Automated tests cover ordering, saturation, failure containment, drain/cancel shutdown, callback failure, temp cleanup, capture overflow policy, backend contracts, MLX waveform conversion, factory/platform policy, Turkish WER/CER, and Phase 2 diagnostics. Phase 4 has one local real-speech STT benchmark, but Phase 5 has no live DeepL/Edge/SAPI end-to-end latency or sustained-load measurement yet.
 
 ## BACKEND STATUS
 
@@ -154,6 +164,7 @@ Remaining platform assumptions are:
 - `BackendFactory` → compatible config selection with lazy concrete imports.
 - `PipelineComponents` → complete constructor injection for deterministic tests.
 - `RuntimePlatform` → isolated, deterministic platform capability facts.
+- `PipelineRuntime` → ordered bounded STT/translation/TTS/playback workers with explicit backpressure and lifecycle metrics.
 
 ABCs were chosen for the new contracts because the repository already used an
 ABC for TTS. This keeps the boundary explicit without adding a framework.
@@ -171,4 +182,4 @@ Windows and selector-free configurations retain Faster Whisper. See
 
 ## PROPOSED V2 DIRECTION
 
-The remaining direction is to preserve the Windows implementation while introducing bounded stage queues/workers with explicit backpressure, ordered output, observability, and clean shutdown. Streaming STT, local or streaming TTS, and optional local/hybrid translation remain later work. See `docs/MAC_V2_PLAN.md`.
+The remaining direction is to validate the concurrent live path under sustained real meetings, then evaluate local or streaming TTS and optional local/hybrid translation without removing the Windows implementations. See `docs/MAC_V2_PLAN.md`.

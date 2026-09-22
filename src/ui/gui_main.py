@@ -36,10 +36,13 @@ class PipelineWorker(QThread):
         self.config = config
         self.pipeline = None
         self._is_running = False
+        self._stop_requested = threading.Event()
 
     def run(self):
         try:
             self.pipeline = TranslationPipeline(self.config)
+            if self._stop_requested.is_set():
+                self.pipeline.stop()
             self._is_running = True
             self.pipeline.run_live()
         except Exception as e:
@@ -49,9 +52,9 @@ class PipelineWorker(QThread):
             self.finished.emit()
 
     def stop(self):
-        if self.pipeline and self._is_running:
+        self._stop_requested.set()
+        if self.pipeline:
             self.pipeline.stop()
-            self.wait()
 
 # --- Main Window ---
 class MainWindow(QMainWindow):
@@ -64,6 +67,7 @@ class MainWindow(QMainWindow):
         # Init logic
         self.config = Config()
         self.worker = None
+        self._closing = False
         self.overlay = SubtitleOverlay()
         
         # Setup Logging (GUI specific handler)
@@ -207,6 +211,8 @@ class MainWindow(QMainWindow):
         self.update_button_style(False)
         self.btn_start.setEnabled(True)
         self.status_indicator.setText("STOPPED")
+        if self._closing:
+            QTimer.singleShot(0, self.close)
 
     def toggle_overlay(self, visible):
         if visible and self.worker and self.worker.isRunning():
@@ -248,8 +254,11 @@ class MainWindow(QMainWindow):
                 pass
 
     def closeEvent(self, event):
-        if self.worker:
+        if self.worker and self.worker.isRunning():
+            self._closing = True
             self.worker.stop()
+            event.ignore()
+            return
         self.overlay.close()
         event.accept()
 
