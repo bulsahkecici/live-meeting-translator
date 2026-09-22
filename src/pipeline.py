@@ -118,6 +118,12 @@ class TranslationPipeline:
             logger.warning("STT returned no text, skipping segment")
             return False
 
+        logger.info(
+            "Outgoing STT completed for segment %s: '%s'",
+            message.sequence_id,
+            message.source_text,
+        )
+
         common_false_positives = [
             "videoyu izlediğiniz için teşekkürler",
             "videoyu izlediğiniz için",

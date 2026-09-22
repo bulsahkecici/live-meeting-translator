@@ -1,6 +1,6 @@
 # Architecture
 
-## CURRENT ARCHITECTURE — PHASE 5
+## CURRENT ARCHITECTURE — PHASE 5 + BIDIRECTIONAL MAC GUI
 
 This section describes the code currently present in `src/`. Phase 5 keeps the
 Phase 4 backend choices while moving the live STT, translation, TTS, and
@@ -42,6 +42,13 @@ flowchart TD
 
 `src/main.py` parses `live`, `gui`, `dryrun`, `test`, `beep`, and `list-devices` modes. Device listing is handled before importing configuration or the pipeline, so it does not load AI or TTS backends. Other modes load configuration, initialize logging, and construct `TranslationPipeline`. GUI mode creates the same pipeline in a `QThread`.
 
+GUI mode can additionally start `IncomingSubtitlePipeline`. It captures only
+the conference-output loop from BlackHole 16ch, segments it independently,
+runs English Faster Whisper and EN-to-TR DeepL workers, and emits subtitle pairs
+to Qt. This channel has no TTS or audio output, so it cannot feed remote speech
+back to Zoom. The two paths use distinct virtual devices: BlackHole 2ch for the
+outgoing Zoom microphone and BlackHole 16ch for incoming subtitles.
+
 In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunks. The pipeline loop continuously reads chunks, passes them to `VAD`, and submits completed segments to `PipelineRuntime`. One worker per stage preserves FIFO order while allowing different segments to occupy STT, translation, TTS, and playback concurrently. `process_segment()` remains as a synchronous compatibility path for direct callers and deterministic tests.
 
 ### Main modules
@@ -50,6 +57,7 @@ In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunk
 | --- | --- |
 | `src/main.py` | CLI entry point, mode selection, configuration and logging startup |
 | `src/pipeline.py` | Coordinates injected components for all live/dry-run/test processing |
+| `src/incoming_subtitles.py` | Bounded English-audio-to-Turkish-subtitle channel with no playback stage |
 | `src/pipeline_runtime.py` | Ordered stage messages, bounded FIFO queues, workers, shutdown, backpressure, and metrics |
 | `src/backend_interfaces.py` | Minimal ABC contracts for STT, translation, audio input, and audio output |
 | `src/backend_factory.py` | Lazily maps compatible configuration to current concrete components |
@@ -73,7 +81,7 @@ In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunk
 
 ### Audio input
 
-`AudioInput` opens a `sounddevice.InputStream` for a selected numeric device index. Its callback converts data to `int16`, keeps only the first channel when input is multichannel, and pushes byte chunks into `queue.Queue(maxsize=200)`. A PortAudio callback cannot block safely; if this queue is full, it preserves older queued speech, rejects the current chunk, increments a visible counter, and logs an error. The live pipeline detects a new rejection and stops with `PipelineBackpressureError` instead of continuing with an undisclosed continuity gap. Device selection supports an explicit index, a case-insensitive name substring, or the current system default.
+`AudioInput` opens a `sounddevice.InputStream` for a selected numeric device index. Its callback converts data to `int16` and pushes mono byte chunks into `queue.Queue(maxsize=200)`. Legacy/default inputs continue taking the first channel; the incoming conference profile explicitly opts into stereo-to-mono averaging so speech panned to either side remains visible. A PortAudio callback cannot block safely; if this queue is full, it preserves older queued speech, rejects the current chunk, increments a visible counter, and logs an error. Each live channel detects a new rejection and stops with `PipelineBackpressureError` instead of continuing with an undisclosed continuity gap. Device selection supports an explicit index, a case-insensitive name substring, or the current system default.
 
 ### VAD
 
@@ -90,12 +98,15 @@ to a normalized NumPy waveform, resamples in memory when needed, preloads the
 exact configured MLX model, and calls `mlx_whisper.transcribe` without a temporary
 WAV. `mlx-whisper 0.4.3` has no beam-search decoder, so configured `beam_size: 1`
 maps explicitly to temperature-zero greedy decoding; other beam sizes fail
-clearly. Concrete imports and model construction remain lazy, and selecting MLX
-never silently falls back to Faster Whisper or changes the model identifier.
+clearly. MLX model preload and inference share one explicitly cross-thread Metal
+stream guarded by the backend lock, because regular MLX streams cannot move from
+factory construction to the Phase 5 STT worker. Concrete imports and model
+construction remain lazy, and selecting MLX never silently falls back to Faster
+Whisper or changes the model identifier.
 
 ### Translation
 
-`TranslatorBackend` defines only `translate(text)`. The current `DeepLTranslator` implementation posts text and the API key to the DeepL Free endpoint, retries timeouts, rate limits, and server failures with backoff, and caches translations in memory. The factory, rather than `TranslationPipeline`, selects it and still refuses to construct it without `DEEPL_API_KEY`.
+`TranslatorBackend` defines only `translate(text)`. The current `DeepLTranslator` implementation posts text to the DeepL Free endpoint and sends the API key only through the required `Authorization: DeepL-Auth-Key ...` header. It retries timeouts, rate limits, and server failures with backoff, and caches translations in memory. Separate instances use TR-to-EN for outgoing speech and EN-to-TR for incoming subtitles. The factory, rather than either pipeline, selects them and refuses to construct them without `DEEPL_API_KEY`.
 
 ### TTS
 
@@ -107,11 +118,11 @@ TTS retains the existing `TTSEngine` abstract base; no redundant TTS interface w
 
 ### GUI
 
-`gui_main.py` runs `TranslationPipeline.run_live()` in one `QThread`, keeping the Qt event loop responsive. It parses log message text to update the subtitle overlay, coupling display behavior to exact log strings. The overlay uses platform-neutral PyQt APIs but specifies Windows-oriented fonts such as Segoe UI/Consolas.
+`gui_main.py` presents separate outgoing and incoming transcript cards, explicit route labels, one session control, a compact event log, and an optional always-on-top incoming Turkish subtitle overlay. Outgoing audio and incoming subtitles run in separate `QThread` owners. Incoming subtitle pairs use a Qt signal rather than log parsing; outgoing card updates consume channel-qualified pipeline log events. Stop requests both channels without blocking the Qt event loop while bounded queues drain.
 
 ### Configuration
 
-`Config` loads `config.yaml` by default and overlays only the `DEEPL_API_KEY` environment value. The checked-in deployment profile now explicitly targets the primary Mac with the built-in microphone, BlackHole output, and `mlx-community/whisper-large-v3-turbo`. The cross-platform example and existing files without backend selectors remain compatible: the factory still defaults `stt.backend` to `faster-whisper`, `translate.backend` to `deepl`, and continues using the existing `tts.engine` values. Explicit `stt.backend: mlx-whisper` requires Apple Silicon macOS and an MLX-format model identifier. Older sample-rate and VAD keys remain accepted. Invalid explicit backend names fail with a clear error. The application still does not validate the complete schema before component construction.
+`Config` loads `config.yaml` by default and overlays only the `DEEPL_API_KEY` environment value. The checked-in deployment profile explicitly targets the primary Mac with the built-in microphone, BlackHole 2ch output, `mlx-community/whisper-large-v3-turbo`, and an enabled BlackHole 16ch incoming subtitle channel using Faster Whisper small. The cross-platform example keeps `incoming_subtitles.enabled: false`, so existing Windows and selector-free configurations retain their one-way behavior. Factory defaults and older sample-rate/VAD keys remain compatible. Invalid explicit backend names fail clearly. The application still does not validate the complete schema before component construction.
 
 ### Error handling
 
@@ -125,6 +136,7 @@ Component initialization generally raises to `main.py`, which logs and exits. Ru
 - Backpressure blocks between internal stages. Ingress saturation stops capture visibly after a configurable timeout; the rejected current segment is retried during bounded shutdown drain before the sentinel, so accepted speech is not evicted.
 - Normal stop drains; `stop(cancel=True)` visibly cancels queued work. Queue depth/high-water, stage totals/counts, completion/failure/cancel counts, and last end-to-end latency are observable through `runtime_metrics()` and final logs.
 - GUI mode still owns `run_live()` in one `QThread`; the four pipeline workers run beneath it, blocking playback no longer blocks capture/VAD consumption, and the stop button requests shutdown without blocking the Qt event loop.
+- When incoming subtitles are enabled, a second QThread owns its capture loop and two bounded workers; outgoing and incoming queue metrics remain separate.
 
 ### Current platform handling
 
@@ -138,7 +150,7 @@ Remaining platform assumptions are:
 - Installation guidance includes Visual C++ Build Tools and a CUDA 11.8 PyTorch index.
 - Faster Whisper retains its CPU/CUDA paths; the MLX Whisper implementation is isolated to Apple Silicon/Metal and does not carry CUDA assumptions.
 - Edge TTS conversion assumes `ffmpeg` is available to `pydub` when MP3 conversion is needed.
-- Dependency pins and the UTF-16-generated `requirements_freeze.txt` reflect a Windows environment and have not been validated for Python 3.14 or Apple Silicon.
+- `requirements.txt` and the UTF-16-generated `requirements_freeze.txt` remain Windows-oriented. The verified Python 3.11 Apple Silicon environment instead uses `requirements-macos-stt.txt` plus `requirements-macos-app.txt`; Python 3.14 remains unvalidated.
 
 ### Known architectural risks
 
@@ -149,8 +161,8 @@ Remaining platform assumptions are:
 - Component constructors still have observable side effects; the factory preserves the legacy order of device queries, VAD, model loading, DeepL validation, and TTS probing.
 - Device indexes are supported as persistent configuration even though operating systems can reorder them, and substring selection takes the first match.
 - No non-Windows TTS fallback exists; an unavailable engine fails startup explicitly outside Windows.
-- GUI subtitle updates depend on parsing log text rather than structured events.
-- Automated tests cover ordering, saturation, failure containment, drain/cancel shutdown, callback failure, temp cleanup, capture overflow policy, backend contracts, MLX waveform conversion, factory/platform policy, Turkish WER/CER, and Phase 2 diagnostics. Phase 4 has one local real-speech STT benchmark, but Phase 5 has no live DeepL/Edge/SAPI end-to-end latency or sustained-load measurement yet.
+- Incoming GUI subtitles use structured Qt signals, while outgoing card updates still depend on channel-qualified pipeline log events.
+- Automated tests cover both channel directions, GUI card isolation, ordering, saturation, failure containment, drain/cancel shutdown, callback failure, temp cleanup, capture overflow policy, backend contracts, MLX waveform conversion, factory/platform policy, Turkish WER/CER, and Phase 2 diagnostics. Bounded real Mac integration checks cover outgoing MLX/DeepL/Edge/BlackHole and incoming BlackHole/Faster Whisper/DeepL paths, but no sustained two-person Zoom or thermal/load run exists yet.
 
 ## BACKEND STATUS
 
@@ -165,6 +177,7 @@ Remaining platform assumptions are:
 - `PipelineComponents` → complete constructor injection for deterministic tests.
 - `RuntimePlatform` → isolated, deterministic platform capability facts.
 - `PipelineRuntime` → ordered bounded STT/translation/TTS/playback workers with explicit backpressure and lifecycle metrics.
+- `IncomingSubtitlePipeline` → separate bounded English STT and Turkish translation workers with no playback route.
 
 ABCs were chosen for the new contracts because the repository already used an
 ABC for TTS. This keeps the boundary explicit without adding a framework.

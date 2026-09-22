@@ -20,7 +20,8 @@ class AudioInput(AudioInputBackend):
         channels: int = 1,
         dtype: str = 'int16',
         blocksize: int = 4800,  # ~300ms at 16kHz
-        callback: Optional[Callable] = None
+        callback: Optional[Callable] = None,
+        mix_to_mono: bool = False
     ):
         """
         Initialize audio input stream.
@@ -32,12 +33,14 @@ class AudioInput(AudioInputBackend):
             dtype: Data type ('int16' or 'float32')
             blocksize: Block size in samples
             callback: Optional callback function(indata, frames, time, status)
+            mix_to_mono: Average multichannel input instead of taking channel 1
         """
         self.device_index = device_index
         self.sample_rate = sample_rate
         self.channels = channels
         self.dtype = dtype
         self.blocksize = blocksize
+        self.mix_to_mono = mix_to_mono
         self.callback = callback
         
         self.stream: Optional[sd.InputStream] = None
@@ -69,13 +72,23 @@ class AudioInput(AudioInputBackend):
             
             # Ensure mono
             if indata_int16.shape[1] > 1:
-                indata_int16 = indata_int16[:, 0:1]
+                if self.mix_to_mono:
+                    indata_int16 = np.clip(
+                        indata_int16.astype(np.int32).mean(axis=1, keepdims=True),
+                        -32768,
+                        32767,
+                    ).astype(np.int16)
+                else:
+                    indata_int16 = indata_int16[:, 0:1]
             
             audio_bytes = indata_int16.tobytes()
         else:
             # float32
             if indata.shape[1] > 1:
-                indata = indata[:, 0:1]
+                if self.mix_to_mono:
+                    indata = indata.mean(axis=1, keepdims=True)
+                else:
+                    indata = indata[:, 0:1]
             audio_bytes = indata.tobytes()
         
         # Preserve already queued speech. A saturated callback cannot block, so

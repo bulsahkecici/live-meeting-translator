@@ -1,4 +1,5 @@
 # Phase 4 direct STT dependencies for Apple Silicon macOS.
 # Install into the existing Python 3.11 .venv; do not install requirements.txt.
+mlx==0.32.2; platform_system == "Darwin" and platform_machine == "arm64"
 mlx-whisper==0.4.3; platform_system == "Darwin" and platform_machine == "arm64"
 faster-whisper==1.2.1

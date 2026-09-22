@@ -237,6 +237,69 @@ legacy synchronous injection path. No live DeepL/Edge/SAPI meeting run or
 sustained thermal/load benchmark was performed in this phase, so Phase 5 makes
 no measured end-to-end latency claim.
 
+### Primary-Mac application readiness (2026-09-22)
+
+The existing Python 3.11 Apple Silicon environment now has two explicit
+dependency layers: `requirements-macos-stt.txt` for MLX/Faster Whisper and
+`requirements-macos-app.txt` for configuration, caching, VAD, Edge TTS, WAV
+conversion, GUI, and optional noise reduction. Installing the application
+layer did not downgrade the verified STT stack. All 64 deterministic tests,
+source compilation, `pip check`, and the repository smoke test passed.
+
+A host-level CoreAudio enumeration resolved `MacBook Pro Mikrofonu` as the
+configured input and `BlackHole 2ch` as the configured output. A fixed,
+non-sensitive Edge TTS phrase produced a 48 kHz mono WAV (3.048 seconds), and
+blocking playback to BlackHole completed successfully; the temporary audio was
+deleted immediately.
+
+The first full live attempt exposed two integration-only defects that the
+earlier synchronous STT benchmark could not reveal. MLX model preload happened
+on the construction thread while inference ran on the Phase 5 STT worker, so a
+regular Metal stream failed cross-thread. The backend now uses one MLX 0.32.2
+cross-thread stream guarded by a lock; an isolated real-audio worker-thread test
+and a deterministic regression test pass. DeepL also rejected the legacy
+`auth_key` form field, so the translator now uses the current required
+`Authorization: DeepL-Auth-Key ...` header, covered by a fake-HTTP test and a
+successful fixed-text service check. The key remains only in ignored `.env`.
+
+The completed live acceptance used MacBook Pro Mikrofonu -> MLX Turbo -> DeepL
+-> Edge -> BlackHole. The accepted utterance was recognized as `Merhaba, bugün
+sistemin Mac Link'si ara doğru çalıştığını test ediyorum.` and translated as
+`Hello, today I'm testing to see if the system's Mac Link is working properly.`
+The STT wording differs from the spoken prompt, so this is integration
+acceptance rather than a new quality benchmark. Its measured stages were STT
+0.173 s, translation 0.660 s, TTS 1.248 s, and blocking BlackHole playback
+5.209 s, with 7.290 s segmentation-to-playback completion. The bounded run
+completed both submitted segments with zero failures, cancellations, overloads,
+or capture drops; all queues drained, all workers stopped, and temporary TTS
+audio was removed. No microphone audio file was retained or uploaded.
+
+### Bidirectional meeting GUI extension (2026-09-22)
+
+The primary Mac now has separate BlackHole 2ch and BlackHole 16ch HAL devices.
+Audio MIDI Setup contains `Zoom Incoming Monitor`, a 48 kHz Multi-Output device
+with MacBook Pro Hoparlörü as primary and BlackHole 16ch with drift correction;
+BlackHole 2ch is excluded. Zoom can therefore use BlackHole 2ch as its microphone
+and Zoom Incoming Monitor as its speaker without routing the remote participant
+back into the meeting.
+
+`IncomingSubtitlePipeline` uses a separate 48 kHz stereo capture, opt-in mono
+mix, VAD, bounded English Faster Whisper queue, and bounded EN-to-TR DeepL queue.
+It emits subtitle pairs only and has no TTS or playback stage. The GUI now shows
+independent outgoing and incoming cards, route state, session state, a compact
+event log, and an optional always-on-top incoming Turkish overlay. One button
+starts and drains both channel owners; a failure in either requests a visible
+stop of the other.
+
+A fixed local English utterance traversed Zoom Incoming Monitor -> BlackHole
+16ch -> Faster Whisper small -> DeepL -> Turkish subtitle. The English transcript
+was exact; STT was 0.779 s, translation 0.753 s, and completion was 1.532 s.
+There were zero failures, overloads, cancellations, or capture drops, queues
+drained, and temporary audio was removed. This does not yet prove Zoom's own
+device selections or a two-person live meeting. A final repeat after enabling
+stereo-to-mono averaging returned the same exact English transcript and Turkish
+translation in 1.326 s total.
+
 ## PHASE 6 — local/streaming TTS
 
 **Objective:** Add a macOS-capable low-latency TTS option without removing SAPI or Edge TTS prematurely.

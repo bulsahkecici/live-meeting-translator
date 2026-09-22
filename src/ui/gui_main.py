@@ -1,41 +1,52 @@
-import sys
+"""Bidirectional meeting translation GUI."""
 import logging
+import sys
 import threading
-from pathlib import Path
 
+from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QLabel, QPlainTextEdit, QFrame, QCheckBox
+    QApplication,
+    QCheckBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPlainTextEdit,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QIcon, QColor, QPalette, QFont
 
 from src.config import Config
+from src.incoming_subtitles import IncomingSubtitlePipeline
 from src.pipeline import TranslationPipeline
-from src.utils import setup_logging
 from src.ui.gui_overlay import SubtitleOverlay
 
-# --- Log Handler ---
+
 class QtLogHandler(logging.Handler, QObject):
-    log_signal = pyqtSignal(str, str) # level, message
+    """Forward standard logging records to the Qt event loop."""
+
+    log_signal = pyqtSignal(str, str, str)
 
     def __init__(self):
         logging.Handler.__init__(self)
         QObject.__init__(self)
 
     def emit(self, record):
-        msg = self.format(record)
-        self.log_signal.emit(record.levelname, msg)
+        self.log_signal.emit(record.levelname, record.name, self.format(record))
 
-# --- Worker Thread ---
+
 class PipelineWorker(QThread):
-    finished = pyqtSignal()
-    
+    """Run the existing Turkish-to-English audio pipeline."""
+
+    error = pyqtSignal(str)
+
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.pipeline = None
-        self._is_running = False
         self._stop_requested = threading.Event()
 
     def run(self):
@@ -43,224 +54,488 @@ class PipelineWorker(QThread):
             self.pipeline = TranslationPipeline(self.config)
             if self._stop_requested.is_set():
                 self.pipeline.stop()
-            self._is_running = True
             self.pipeline.run_live()
-        except Exception as e:
-            logging.error(f"Pipeline crashed: {e}")
-        finally:
-            self._is_running = False
-            self.finished.emit()
+        except Exception as exc:
+            logging.error("Outgoing pipeline crashed: %s", exc, exc_info=True)
+            self.error.emit(str(exc))
 
     def stop(self):
         self._stop_requested.set()
         if self.pipeline:
             self.pipeline.stop()
 
-# --- Main Window ---
+
+class IncomingSubtitleWorker(QThread):
+    """Run the English-to-Turkish subtitle-only pipeline."""
+
+    subtitle = pyqtSignal(str, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.pipeline = None
+        self._stop_requested = threading.Event()
+
+    def run(self):
+        try:
+            self.pipeline = IncomingSubtitlePipeline(
+                self.config,
+                on_subtitle=self.subtitle.emit,
+            )
+            if self._stop_requested.is_set():
+                self.pipeline.stop()
+            self.pipeline.run_live()
+        except Exception as exc:
+            logging.error("Incoming subtitle pipeline crashed: %s", exc, exc_info=True)
+            self.error.emit(str(exc))
+
+    def stop(self):
+        self._stop_requested.set()
+        if self.pipeline:
+            self.pipeline.stop()
+
+
+class DirectionCard(QFrame):
+    """One compact source/target transcript card."""
+
+    def __init__(
+        self,
+        eyebrow: str,
+        title: str,
+        route: str,
+        source_caption: str,
+        target_caption: str,
+        accent: str,
+    ):
+        super().__init__()
+        self.setObjectName("directionCard")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 18, 22, 20)
+        layout.setSpacing(8)
+
+        eyebrow_label = QLabel(eyebrow.upper())
+        eyebrow_label.setStyleSheet(
+            f"color: {accent}; font-size: 10px; font-weight: 800; "
+            "letter-spacing: 1.5px;"
+        )
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            "color: #F5F7FA; font-size: 20px; font-weight: 750;"
+        )
+        route_label = QLabel(route)
+        route_label.setStyleSheet("color: #7D8799; font-size: 11px;")
+
+        source_label = QLabel(source_caption.upper())
+        source_label.setStyleSheet(
+            "color: #7D8799; font-size: 9px; font-weight: 700; "
+            "letter-spacing: 1px; margin-top: 8px;"
+        )
+        self.source_text = QLabel("Konuşma bekleniyor…")
+        self.source_text.setWordWrap(True)
+        self.source_text.setMinimumHeight(42)
+        self.source_text.setStyleSheet(
+            "color: #C8D0DC; font-size: 15px; line-height: 1.35;"
+        )
+
+        target_label = QLabel(target_caption.upper())
+        target_label.setStyleSheet(
+            f"color: {accent}; font-size: 9px; font-weight: 700; "
+            "letter-spacing: 1px; margin-top: 8px;"
+        )
+        self.target_text = QLabel("—")
+        self.target_text.setWordWrap(True)
+        self.target_text.setMinimumHeight(58)
+        self.target_text.setStyleSheet(
+            f"color: {accent}; font-size: 19px; font-weight: 650; "
+            "line-height: 1.4;"
+        )
+
+        layout.addWidget(eyebrow_label)
+        layout.addWidget(title_label)
+        layout.addWidget(route_label)
+        layout.addWidget(source_label)
+        layout.addWidget(self.source_text)
+        layout.addWidget(target_label)
+        layout.addWidget(self.target_text)
+        layout.addStretch()
+
+    def set_transcript(self, source: str = None, target: str = None):
+        if source:
+            self.source_text.setText(source)
+        if target:
+            self.target_text.setText(target)
+
+    def reset(self):
+        self.source_text.setText("Konuşma bekleniyor…")
+        self.target_text.setText("—")
+
+
 class MainWindow(QMainWindow):
+    """Control both meeting directions without mixing their audio routes."""
+
     def __init__(self):
         super().__init__()
-        
-        self.setWindowTitle("Zoom Live Translate")
-        self.resize(500, 600)
-        
-        # Init logic
+        self.setWindowTitle("Meeting Bridge — TR ⇄ EN")
+        self.resize(920, 820)
+        self.setMinimumSize(780, 680)
+
         self.config = Config()
         self.worker = None
+        self.incoming_worker = None
         self._closing = False
+        self._stopping = False
+        self._ready_channels = set()
         self.overlay = SubtitleOverlay()
-        
-        # Setup Logging (GUI specific handler)
-        # Note: File logging is already set up in main.py
+
         self.log_handler = QtLogHandler()
-        self.log_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s', '%H:%M:%S'))
+        self.log_handler.setFormatter(
+            logging.Formatter("%(asctime)s  %(message)s", "%H:%M:%S")
+        )
         logging.getLogger().addHandler(self.log_handler)
         self.log_handler.log_signal.connect(self.handle_log)
-        
-        # UI Setup
+
         self.init_ui()
         self.apply_theme()
-        
+
+    @property
+    def incoming_enabled(self) -> bool:
+        return self.config.incoming_subtitles_config.get("enabled", False)
+
     def init_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
-        layout.setSpacing(20)
-        layout.setContentsMargins(30, 30, 30, 30)
-        
-        # Header
-        header_Layout = QVBoxLayout()
-        title_lbl = QLabel("ZOOM LIVE TRANSLATE")
-        title_lbl.setStyleSheet("font-size: 24px; font-weight: 900; letter-spacing: 2px; color: #00FFCC;")
-        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        subtitle_lbl = QLabel("Real-time Turkish to English AI Translation")
-        subtitle_lbl.setStyleSheet("font-size: 12px; color: #aaaaaa; margin-bottom: 20px;")
-        subtitle_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        header_Layout.addWidget(title_lbl)
-        header_Layout.addWidget(subtitle_lbl)
-        layout.addLayout(header_Layout)
-        
-        # Status
-        self.status_indicator = QLabel("STOPPED")
+        root = QWidget()
+        root.setObjectName("root")
+        self.setCentralWidget(root)
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+
+        header = QHBoxLayout()
+        brand = QVBoxLayout()
+        brand.setSpacing(2)
+        title = QLabel("MEETING BRIDGE")
+        title.setStyleSheet(
+            "color: #F5F7FA; font-size: 25px; font-weight: 850; "
+            "letter-spacing: 2px;"
+        )
+        subtitle = QLabel("Gerçek zamanlı Türkçe ⇄ İngilizce görüşme asistanı")
+        subtitle.setStyleSheet("color: #7D8799; font-size: 12px;")
+        brand.addWidget(title)
+        brand.addWidget(subtitle)
+        header.addLayout(brand)
+        header.addStretch()
+
+        self.status_indicator = QLabel("HAZIR")
+        self.status_indicator.setObjectName("statusPill")
         self.status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_indicator.setStyleSheet("""
-            background-color: #333333; 
-            color: #FF5555; 
-            border-radius: 5px; 
-            padding: 8px; 
-            font-weight: bold;
-        """)
-        layout.addWidget(self.status_indicator)
-        
-        # Controls
-        controls_layout = QHBoxLayout()
-        
-        self.btn_start = QPushButton("START LISTENING")
+        self.status_indicator.setMinimumWidth(150)
+        header.addWidget(self.status_indicator)
+        layout.addLayout(header)
+
+        route_bar = QFrame()
+        route_bar.setObjectName("routeBar")
+        route_layout = QHBoxLayout(route_bar)
+        route_layout.setContentsMargins(16, 11, 16, 11)
+        outgoing_input = self.config.audio_input.get("name_substring") or "Varsayılan giriş"
+        outgoing_output = (
+            self.config.audio_output.get("name_substring") or "Varsayılan çıkış"
+        )
+        incoming_config = self.config.incoming_subtitles_config
+        incoming_input = incoming_config.get("audio_input", {}).get(
+            "name_substring",
+            "Ayrı konferans girişi",
+        )
+        self.outgoing_route_status = QLabel(
+            f"●  SİZ: {outgoing_input} → {outgoing_output}"
+        )
+        self.incoming_route_status = QLabel(
+            f"●  ZOOM: {incoming_input} → Türkçe altyazı"
+            if self.incoming_enabled
+            else "●  GELEN ALTYAZI DEVRE DIŞI"
+        )
+        self.outgoing_route_status.setStyleSheet("color: #58D6C7; font-size: 11px;")
+        self.incoming_route_status.setStyleSheet("color: #B59CFF; font-size: 11px;")
+        route_layout.addWidget(self.outgoing_route_status)
+        route_layout.addStretch()
+        route_layout.addWidget(self.incoming_route_status)
+        layout.addWidget(route_bar)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
+        outgoing_stt = self.config.stt_config.get("backend", "faster-whisper")
+        outgoing_tts = self.config.tts_config.get("engine", "sapi")
+        incoming_stt = incoming_config.get("stt", {}).get(
+            "backend",
+            "faster-whisper",
+        )
+        self.outgoing_card = DirectionCard(
+            "Siz → Karşı taraf",
+            "Türkçe konuşun",
+            f"{outgoing_stt}  •  DeepL  •  {outgoing_tts} TTS",
+            "Algılanan Türkçe",
+            "Zoom'a gönderilen İngilizce",
+            "#58D6C7",
+        )
+        self.incoming_card = DirectionCard(
+            "Karşı taraf → Siz",
+            "İngilizceyi takip edin",
+            f"{incoming_input}  •  {incoming_stt}  •  DeepL",
+            "Algılanan İngilizce",
+            "Türkçe altyazı",
+            "#B59CFF",
+        )
+        cards.addWidget(self.outgoing_card)
+        cards.addWidget(self.incoming_card)
+        layout.addLayout(cards, stretch=1)
+        if not self.incoming_enabled:
+            self.incoming_card.source_text.setText("Yapılandırmada devre dışı")
+
+        controls = QHBoxLayout()
+        self.btn_start = QPushButton("OTURUMU BAŞLAT")
         self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_start.setMinimumHeight(50)
+        self.btn_start.setMinimumHeight(54)
         self.btn_start.clicked.connect(self.toggle_start)
-        
-        controls_layout.addWidget(self.btn_start)
-        layout.addLayout(controls_layout)
-        
-        # Options
-        self.chk_overlay = QCheckBox("Show Subtitle Overlay")
+        controls.addWidget(self.btn_start, stretch=1)
+
+        self.chk_overlay = QCheckBox("Türkçe altyazıyı ekran üstünde göster")
         self.chk_overlay.setChecked(True)
-        self.chk_overlay.setStyleSheet("color: white; font-size: 14px;")
         self.chk_overlay.toggled.connect(self.toggle_overlay)
-        layout.addWidget(self.chk_overlay)
-        
-        # Console
+        controls.addWidget(self.chk_overlay)
+        layout.addLayout(controls)
+
         console_frame = QFrame()
-        console_frame.setStyleSheet("background-color: #111; border-radius: 10px; border: 1px solid #333;")
+        console_frame.setObjectName("consoleFrame")
         console_layout = QVBoxLayout(console_frame)
-        
+        console_layout.setContentsMargins(14, 10, 14, 10)
+        console_title = QLabel("OTURUM GÜNLÜĞÜ")
+        console_title.setStyleSheet(
+            "color: #667085; font-size: 9px; font-weight: 700; "
+            "letter-spacing: 1px;"
+        )
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
-        self.console.setStyleSheet("background: transparent; color: #ccc; font-family: Consolas, monospace; border: none;")
+        self.console.setMaximumHeight(130)
+        self.console.setFont(QFont("Menlo", 10))
+        console_layout.addWidget(console_title)
         console_layout.addWidget(self.console)
-        
         layout.addWidget(console_frame)
-        
-        # Footer
-        footer_lbl = QLabel("AI Powered by Whisper & DeepL")
-        footer_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        footer_lbl.setStyleSheet("color: #555; font-size: 10px;")
-        layout.addWidget(footer_lbl)
 
     def apply_theme(self):
-        # Dark Theme
-        self.setStyleSheet("background-color: #1E1E1E;")
-        
-        # Button Style
+        self.setStyleSheet(
+            """
+            QWidget#root { background-color: #0C111B; }
+            QFrame#routeBar {
+                background-color: #111927;
+                border: 1px solid #223047;
+                border-radius: 10px;
+            }
+            QFrame#directionCard {
+                background-color: #121A28;
+                border: 1px solid #25334A;
+                border-radius: 16px;
+            }
+            QFrame#consoleFrame {
+                background-color: #0A0F18;
+                border: 1px solid #1B2638;
+                border-radius: 12px;
+            }
+            QPlainTextEdit {
+                background: transparent;
+                color: #8B96A8;
+                border: none;
+                selection-background-color: #31405A;
+            }
+            QCheckBox { color: #AAB4C3; font-size: 12px; spacing: 8px; }
+            QCheckBox::indicator { width: 18px; height: 18px; }
+            QLabel#statusPill {
+                background-color: #182231;
+                color: #9BA8BA;
+                border: 1px solid #2B3A50;
+                border-radius: 14px;
+                padding: 7px 14px;
+                font-size: 10px;
+                font-weight: 800;
+                letter-spacing: 1px;
+            }
+            """
+        )
         self.update_button_style(False)
 
-    def update_button_style(self, running):
+    def update_button_style(self, running: bool):
         if running:
-            self.btn_start.setText("STOP LISTENING")
-            self.btn_start.setStyleSheet("""
-                QPushButton {
-                    background-color: #FF5555;
-                    color: white;
-                    border: none;
-                    border-radius: 25px;
-                    font-weight: bold;
-                    font-size: 16px;
-                }
-                QPushButton:hover { background-color: #FF3333; }
-            """)
-            self.status_indicator.setText("LISTENING & TRANSLATING")
-            self.status_indicator.setStyleSheet("background-color: #004400; color: #00FF00; border-radius: 5px; padding: 8px; font-weight: bold;")
+            self.btn_start.setText("OTURUMU DURDUR")
+            self.btn_start.setStyleSheet(
+                "QPushButton { background-color: #E85D75; color: white; "
+                "border: none; border-radius: 12px; font-size: 14px; "
+                "font-weight: 800; letter-spacing: 1px; } "
+                "QPushButton:hover { background-color: #F06A82; }"
+            )
         else:
-            self.btn_start.setText("START LISTENING")
-            self.btn_start.setStyleSheet("""
-                QPushButton {
-                    background-color: #00AAFF;
-                    color: white;
-                    border: none;
-                    border-radius: 25px;
-                    font-weight: bold;
-                    font-size: 16px;
-                }
-                QPushButton:hover { background-color: #0088CC; }
-            """)
-            self.status_indicator.setText("READY")
-            self.status_indicator.setStyleSheet("background-color: #333333; color: #AAAAAA; border-radius: 5px; padding: 8px; font-weight: bold;")
+            self.btn_start.setText("OTURUMU BAŞLAT")
+            self.btn_start.setStyleSheet(
+                "QPushButton { background-color: #58D6C7; color: #07110F; "
+                "border: none; border-radius: 12px; font-size: 14px; "
+                "font-weight: 850; letter-spacing: 1px; } "
+                "QPushButton:hover { background-color: #70E3D5; }"
+            )
+
+    def _workers(self):
+        return [worker for worker in (self.worker, self.incoming_worker) if worker]
+
+    def _any_worker_running(self) -> bool:
+        return any(worker.isRunning() for worker in self._workers())
 
     def toggle_start(self):
-        if self.worker and self.worker.isRunning():
-            # Stop
-            self.btn_start.setEnabled(False)
-            self.btn_start.setText("STOPPING...")
-            self.worker.stop()
-            # Finished signal will handle cleanup
+        if self._any_worker_running():
+            self.stop_session()
         else:
-            # Start
-            self.console.clear()
-            self.status_indicator.setText("INITIALIZING (Downloading Model...)")
-            self.status_indicator.setStyleSheet("background-color: #AA5500; color: #FFFFFF; border-radius: 5px; padding: 8px; font-weight: bold;")
-            self.worker = PipelineWorker(self.config)
-            self.worker.finished.connect(self.on_worker_finished)
-            self.worker.start()
-            self.update_button_style(True)
-            self.toggle_overlay(self.chk_overlay.isChecked())
+            self.start_session()
+
+    def start_session(self):
+        self.console.clear()
+        self.outgoing_card.reset()
+        self.incoming_card.reset()
+        if not self.incoming_enabled:
+            self.incoming_card.source_text.setText("Yapılandırmada devre dışı")
+        self._stopping = False
+        self._ready_channels.clear()
+        self.status_indicator.setText("BAŞLATILIYOR")
+        self.status_indicator.setStyleSheet(
+            "background-color: #3A2D12; color: #FFD166; border: 1px solid "
+            "#6B5422; border-radius: 14px; padding: 7px 14px; "
+            "font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+        )
+        self.update_button_style(True)
+
+        self.worker = PipelineWorker(self.config)
+        self.worker.error.connect(self.on_worker_error)
+        self.worker.finished.connect(self.on_worker_finished)
+
+        if self.incoming_enabled:
+            self.incoming_worker = IncomingSubtitleWorker(self.config)
+            self.incoming_worker.subtitle.connect(self.handle_incoming_subtitle)
+            self.incoming_worker.error.connect(self.on_worker_error)
+            self.incoming_worker.finished.connect(self.on_worker_finished)
+        else:
+            self.incoming_worker = None
+            self.incoming_route_status.setText("●  GELEN ALTYAZI DEVRE DIŞI")
+
+        self.worker.start()
+        if self.incoming_worker:
+            self.incoming_worker.start()
+
+    def stop_session(self):
+        self._stopping = True
+        self.btn_start.setEnabled(False)
+        self.btn_start.setText("KUYRUKLAR BOŞALTILIYOR…")
+        self.status_indicator.setText("DURDURULUYOR")
+        for worker in self._workers():
+            if worker.isRunning():
+                worker.stop()
+
+    def on_worker_error(self, message: str):
+        self.status_indicator.setText("HATA")
+        self.status_indicator.setStyleSheet(
+            "background-color: #401923; color: #FF8FA3; border: 1px solid "
+            "#713044; border-radius: 14px; padding: 7px 14px; "
+            "font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+        )
+        self.console.appendPlainText(f"HATA  {message}")
+        if not self._stopping:
+            self.stop_session()
 
     def on_worker_finished(self):
+        if self._any_worker_running():
+            if not self._stopping:
+                self.stop_session()
+            return
+
         self.update_button_style(False)
         self.btn_start.setEnabled(True)
-        self.status_indicator.setText("STOPPED")
+        if self.status_indicator.text() != "HATA":
+            self.status_indicator.setText("DURDURULDU")
+        self.overlay.hide()
         if self._closing:
             QTimer.singleShot(0, self.close)
 
-    def toggle_overlay(self, visible):
-        if visible and self.worker and self.worker.isRunning():
+    def _mark_ready(self, channel: str):
+        self._ready_channels.add(channel)
+        expected = {"outgoing"}
+        if self.incoming_enabled:
+            expected.add("incoming")
+        if expected.issubset(self._ready_channels):
+            self.status_indicator.setText(
+                "CANLI • İKİ YÖN AKTİF"
+                if self.incoming_enabled
+                else "CANLI • GİDEN KANAL AKTİF"
+            )
+            self.status_indicator.setStyleSheet(
+                "background-color: #12372F; color: #65E6D5; border: 1px solid "
+                "#255E53; border-radius: 14px; padding: 7px 14px; "
+                "font-size: 10px; font-weight: 800; letter-spacing: 1px;"
+            )
+            self.toggle_overlay(self.chk_overlay.isChecked())
+
+    def toggle_overlay(self, visible: bool):
+        if visible and self._any_worker_running() and self.incoming_enabled:
             self.overlay.show()
         else:
             self.overlay.hide()
-            
-    def handle_log(self, level, msg):
-        # Safety check: if console not ready yet, skip
-        if not hasattr(self, 'console'):
-            return
 
-        # Append to console
-        color = "#ccc"
-        if level == "WARNING": color = "#FFCC00"
-        if level == "ERROR": color = "#FF5555"
-        
-        try:
-            self.console.appendHtml(f'<span style="color:{color}">{msg}</span>')
-            self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
-        except Exception:
-            pass
-        
-        # Parse for Overlay
-        # Look for "STT result: 'text'"
-        if "STT result: '" in msg:
+    def handle_incoming_subtitle(self, source_text: str, target_text: str):
+        self.incoming_card.set_transcript(source_text, target_text)
+        if self.chk_overlay.isChecked():
+            self.overlay.update_text(
+                source_text=source_text,
+                target_text=target_text,
+            )
+
+    def handle_log(self, level: str, logger_name: str, message: str):
+        if not hasattr(self, "console"):
+            return
+        self.console.appendPlainText(f"{level:<7} {message}")
+        self.console.verticalScrollBar().setValue(
+            self.console.verticalScrollBar().maximum()
+        )
+
+        if "Listening for speech" in message:
+            self._mark_ready("outgoing")
+        if "Incoming subtitle capture active" in message:
+            self._mark_ready("incoming")
+
+        if (
+            logger_name == "src.pipeline"
+            and "Outgoing STT completed for segment" in message
+            and ": '" in message
+        ):
             try:
-                text = msg.split("STT result: '")[1].split("' (detected")[0]
-                self.overlay.update_text(source_text=text)
-            except:
+                text = message.rsplit(": '", 1)[1].rstrip("'")
+                self.outgoing_card.set_transcript(source=text)
+            except (IndexError, AttributeError):
                 pass
-                
-        # Look for "Translation completed ...: 'text'"
-        if "Translation completed" in msg and ": '" in msg:
+
+        if (
+            logger_name == "src.pipeline"
+            and "Translation completed for segment" in message
+            and ": '" in message
+        ):
             try:
-                text = msg.split(": '")[-1].rstrip("'")
-                self.overlay.update_text(target_text=text)
-            except:
+                text = message.rsplit(": '", 1)[1].rstrip("'")
+                self.outgoing_card.set_transcript(target=text)
+            except (IndexError, AttributeError):
                 pass
 
     def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
+        if self._any_worker_running():
             self._closing = True
-            self.worker.stop()
+            self.stop_session()
             event.ignore()
             return
+        logging.getLogger().removeHandler(self.log_handler)
         self.overlay.close()
         event.accept()
+
 
 def run_gui():
     app = QApplication(sys.argv)

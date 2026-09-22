@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Zoom Live Translate: Turkish speech to English audio"
+        description=(
+            "Meeting Bridge: Turkish-to-English meeting audio and optional "
+            "English-to-Turkish subtitles"
+        )
     )
     parser.add_argument(
         '--mode',
@@ -54,7 +57,7 @@ def main():
     
     # Print startup diagnostics
     logger.info("=" * 60)
-    logger.info("Zoom Live Translate - Starting")
+    logger.info("Meeting Bridge - Starting")
     logger.info("=" * 60)
     
     # Print config summary (will be updated with effective values after pipeline init)

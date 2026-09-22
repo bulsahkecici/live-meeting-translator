@@ -82,8 +82,10 @@ class DeepLTranslator(TranslatorBackend):
             try:
                 response = requests.post(
                     self.api_url,
+                    headers={
+                        "Authorization": f"DeepL-Auth-Key {self.api_key}",
+                    },
                     data={
-                        "auth_key": self.api_key,
                         "text": text,
                         "source_lang": self.source_lang,
                         "target_lang": self.target_lang

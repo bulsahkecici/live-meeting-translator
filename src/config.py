@@ -102,3 +102,7 @@ class Config:
         """Pipeline configuration."""
         return self.get('pipeline', {})
 
+    @property
+    def incoming_subtitles_config(self) -> Dict[str, Any]:
+        """Optional English-to-Turkish incoming subtitle configuration."""
+        return self.get('incoming_subtitles', {})

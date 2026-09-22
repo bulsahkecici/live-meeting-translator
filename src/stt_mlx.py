@@ -1,6 +1,7 @@
 """Apple Silicon speech recognition using MLX Whisper."""
 from importlib import import_module
 import logging
+import threading
 from typing import Callable, Optional
 
 import numpy as np
@@ -58,13 +59,30 @@ def _load_mlx_runtime():
     except ImportError as exc:
         raise RuntimeError(f"Failed to initialize MLX/Metal: {exc}") from exc
 
+    try:
+        shared_stream = mlx_core.new_thread_unsafe_stream(mlx_core.gpu)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to initialize MLX/Metal: {exc}") from exc
+
+    def run_on_stream(operation: Callable):
+        # The model is preloaded during pipeline construction, then used by
+        # the single STT worker. MLX's regular streams are bound to their
+        # creation thread, so use one explicitly shareable stream and keep all
+        # access serialized in MLXWhisperBackend.
+        with mlx_core.stream(shared_stream):
+            result = operation()
+            mlx_core.synchronize(shared_stream)
+            return result
+
     def preload(model_name: str):
-        return transcribe_module.ModelHolder.get_model(
-            model_name,
-            mlx_core.float16,
+        return run_on_stream(
+            lambda: transcribe_module.ModelHolder.get_model(
+                model_name,
+                mlx_core.float16,
+            )
         )
 
-    return mlx_whisper.transcribe, preload
+    return mlx_whisper.transcribe, preload, run_on_stream
 
 
 class MLXWhisperBackend(SpeechToTextBackend):
@@ -78,6 +96,7 @@ class MLXWhisperBackend(SpeechToTextBackend):
         *,
         transcribe_fn: Optional[Callable] = None,
         model_loader: Optional[Callable[[str], object]] = None,
+        stream_runner: Optional[Callable[[Callable], object]] = None,
     ):
         self.model_name = model
         self.language = language
@@ -91,11 +110,13 @@ class MLXWhisperBackend(SpeechToTextBackend):
         if transcribe_fn is None:
             if model_loader is not None:
                 raise ValueError("model_loader requires an injected transcribe_fn")
-            transcribe_fn, model_loader = _load_mlx_runtime()
+            transcribe_fn, model_loader, stream_runner = _load_mlx_runtime()
         elif model_loader is None:
             model_loader = lambda _model_name: None
 
         self._transcribe_fn = transcribe_fn
+        self._stream_runner = stream_runner or (lambda operation: operation())
+        self._stream_lock = threading.Lock()
         logger.info(
             "Loading MLX Whisper model: %s, device=metal, dtype=float16, "
             "language=%s",
@@ -124,15 +145,18 @@ class MLXWhisperBackend(SpeechToTextBackend):
                 waveform.size / TARGET_SAMPLE_RATE,
                 TARGET_SAMPLE_RATE,
             )
-            result = self._transcribe_fn(
-                waveform,
-                path_or_hf_repo=self.model_name,
-                language=self.language,
-                task="transcribe",
-                temperature=0.0,
-                verbose=None,
-                word_timestamps=False,
-            )
+            with self._stream_lock:
+                result = self._stream_runner(
+                    lambda: self._transcribe_fn(
+                        waveform,
+                        path_or_hf_repo=self.model_name,
+                        language=self.language,
+                        task="transcribe",
+                        temperature=0.0,
+                        verbose=None,
+                        word_timestamps=False,
+                    )
+                )
             raw_text = result.get("text") if isinstance(result, dict) else None
             text = " ".join(raw_text.split()) if isinstance(raw_text, str) else ""
             if not text:

@@ -1,0 +1,9 @@
+# Application-layer dependencies for the Apple Silicon macOS profile.
+# Install after requirements-macos-stt.txt in the existing Python 3.11 .venv.
+python-dotenv==1.2.3
+cachetools==7.2.0
+webrtcvad-wheels==2.0.14
+edge-tts==7.2.8
+pydub==0.25.1
+PyQt6==6.11.0
+noisereduce==3.0.3

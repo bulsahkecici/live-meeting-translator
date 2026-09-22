@@ -1,7 +1,9 @@
 # macOS Audio Routing Baseline
 
-This Phase 2 diagnostic is isolated from the translation pipeline. It routes live
-microphone frames in memory and neither records audio nor calls cloud services.
+The Phase 2 diagnostic remains isolated from the translation pipeline. The
+primary Mac application now uses two separate BlackHole devices so outgoing
+translated speech and incoming conference subtitles cannot form a feedback
+loop.
 
 ## Topology
 
@@ -19,6 +21,23 @@ MacBook Pro Mikrofonu (1 channel, 48 kHz)
 The BlackHole input observer never feeds the BlackHole output. MacBook speakers
 are not opened, and the diagnostic does not change system defaults, create an
 aggregate device, or enable monitoring.
+
+### Bidirectional application topology
+
+```text
+Outgoing to Zoom:
+MacBook Pro Mikrofonu -> TR STT -> EN translation -> EN TTS
+    -> BlackHole 2ch -> Zoom microphone
+
+Incoming from Zoom:
+Zoom speaker -> Zoom Incoming Monitor (Multi-Output)
+    +-> MacBook Pro Hoparlörü (you hear the participant)
+    +-> BlackHole 16ch -> EN STT -> TR translation -> GUI/overlay only
+```
+
+`Zoom Incoming Monitor` contains MacBook Pro Hoparlörü as its primary device and
+BlackHole 16ch with drift correction. BlackHole 2ch is deliberately excluded.
+The incoming pipeline has no playback or TTS stage.
 
 ## Safe usage
 
@@ -62,13 +81,14 @@ After the raw loopback diagnostic passes, configure Zoom manually:
 
 ```text
 Zoom microphone = BlackHole 2ch
-Zoom speaker = MacBook Pro Hoparlörü or headphones
+Zoom speaker = Zoom Incoming Monitor
 ```
 
-Never select BlackHole as the Zoom speaker. That removes local playback and can
-create confusing loop paths if monitoring is later added. Prefer headphones for
-any future explicit monitoring test. This repository does not automate Zoom,
-join meetings, or transmit audio to another person.
+Never select BlackHole 2ch as the Zoom speaker: that sends the remote
+participant back into Zoom's microphone path. Do not add BlackHole 2ch to the
+Multi-Output device. Headphones remain preferable when feedback from the
+physical room is possible. The repository does not join meetings or transmit
+audio to another person automatically.
 
 ## Troubleshooting
 

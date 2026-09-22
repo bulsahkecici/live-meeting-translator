@@ -295,6 +295,20 @@ class CaptureQueueContinuityTests(unittest.TestCase):
         self.assertEqual(audio_input.queue_size(), 1)
         self.assertEqual(audio_input.read(timeout=0), oldest.tobytes())
 
+    def test_opt_in_stereo_capture_is_mixed_to_mono(self):
+        audio_input = AudioInput.__new__(AudioInput)
+        audio_input.dtype = "int16"
+        audio_input.mix_to_mono = True
+        audio_input.callback = None
+        audio_input._queue = queue.Queue(maxsize=1)
+        audio_input._dropped_chunks = 0
+        stereo = np.array([[1000, -1000], [1000, 0]], dtype=np.int16)
+
+        audio_input._audio_callback(stereo, 2, None, None)
+
+        mixed = np.frombuffer(audio_input.read(timeout=0), dtype=np.int16)
+        np.testing.assert_array_equal(mixed, [0, 500])
+
 
 class TranslationPipelineWorkerTests(unittest.TestCase):
     def _minimal_pipeline(self, tmp_dir):

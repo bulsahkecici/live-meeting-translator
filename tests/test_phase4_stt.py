@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -79,6 +80,33 @@ class MLXBackendTests(unittest.TestCase):
             },
         )
         self.assertTrue(any("STT result:" in message for message in logs.output))
+
+    def test_transcribe_uses_serialized_stream_runner_from_worker_thread(self):
+        transcribe = Mock(return_value={"text": "merhaba", "language": "tr"})
+        runner_threads = []
+
+        def run_on_stream(operation):
+            runner_threads.append(threading.current_thread().name)
+            return operation()
+
+        backend = MLXWhisperBackend(
+            transcribe_fn=transcribe,
+            stream_runner=run_on_stream,
+        )
+        pcm = np.array([0, 1], dtype=np.int16).tobytes()
+        result = {}
+
+        worker = threading.Thread(
+            target=lambda: result.setdefault("text", backend.transcribe(pcm)),
+            name="test-stt-worker",
+        )
+        worker.start()
+        worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result["text"], "merhaba")
+        self.assertEqual(runner_threads, ["test-stt-worker"])
+        transcribe.assert_called_once()
 
     def test_non_16khz_audio_is_resampled_in_memory(self):
         pcm = np.array([-32768, -16384, 0, 32767], dtype=np.int16).tobytes()

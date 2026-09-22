@@ -1,35 +1,106 @@
-# Zoom Live Translate
+# Meeting Bridge — Turkish ⇄ English
 
-A Windows Python application that translates Turkish speech to English audio in real-time, routing the output to Zoom via a virtual audio cable. Designed for stability during long interviews (1+ hours).
+A near-real-time meeting assistant for Apple Silicon macOS, with the existing
+Windows path preserved. It sends your Turkish speech to conferencing software
+as English audio and can display the remote participant's English speech as
+Turkish subtitles.
 
 ## What It Does
 
-1. **Captures** your Turkish speech from a microphone
-2. **Detects** speech segments using Voice Activity Detection (VAD)
-3. **Transcribes** Turkish speech to text using faster-whisper (local STT)
-4. **Translates** text from Turkish to English using DeepL API
-5. **Synthesizes** English text to speech using Windows SAPI TTS
-6. **Outputs** English audio to a virtual audio cable that Zoom reads as your microphone
+The two audio directions are isolated:
+
+- **You → meeting:** microphone → Turkish STT → DeepL TR→EN → English TTS →
+  virtual microphone.
+- **Meeting → you:** conference speaker route → English STT → DeepL EN→TR →
+  GUI and optional always-on-top subtitle overlay. This path has no TTS or
+  playback stage.
+
+The primary Mac profile uses MLX Whisper for outgoing Turkish speech, Faster
+Whisper for incoming English speech, Edge TTS, BlackHole 2ch, and BlackHole
+16ch. Windows retains Faster Whisper, SAPI, VB-CABLE, and optional CUDA support.
 
 ## Prerequisites
 
-### Required
+### Apple Silicon macOS
 
-- **Windows 10/11**
-- **Python 3.10+** (tested with 3.10, 3.11)
-- **VB-Audio Virtual Cable** (VB-CABLE) - [Download here](https://vb-audio.com/Cable/)
-- **DeepL API Key** - [Get free API key](https://www.deepl.com/pro-api)
-- **Headset or headphones** (strongly recommended to prevent feedback loops)
+- Apple Silicon Mac and Python 3.11
+- PortAudio and ffmpeg
+- BlackHole 2ch for outgoing translated audio
+- BlackHole 16ch plus a `Zoom Incoming Monitor` Multi-Output device for incoming
+  subtitles
+- DeepL API key and internet access for translation and Edge TTS
 
-### Recommended
+### Windows 10/11
+
+- Python 3.10 or 3.11
+- VB-Audio Virtual Cable
+- DeepL API key
+- Visual C++ Build Tools when a required wheel is unavailable
+- Headphones are strongly recommended
+
+### Hardware guidance
 
 - **16GB RAM** (for faster-whisper model)
-- **4GB+ GPU** (optional, for CUDA acceleration)
+- **Apple Silicon GPU/Metal** for the primary Mac STT path, or **4GB+ NVIDIA
+  GPU** for optional Windows CUDA acceleration
 - **Stable internet connection** (for DeepL API)
 
 ## Installation
 
-### 1. Install VB-Audio Virtual Cable
+### Apple Silicon macOS (primary development profile)
+
+Use Python 3.11 and keep the macOS dependency layers separate from the
+Windows-oriented `requirements.txt`:
+
+```bash
+brew install portaudio ffmpeg
+brew install --cask blackhole-2ch blackhole-16ch
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip setuptools wheel
+python -m pip install -r requirements-macos-stt.txt
+python -m pip install -r requirements-macos-app.txt
+```
+
+The checked-in `config.yaml` selects `MacBook Pro Mikrofonu`, BlackHole 2ch,
+MLX Whisper large-v3-turbo, DeepL, and Edge TTS for Turkish-to-English audio.
+It also captures Zoom's English output from a separate BlackHole 16ch device
+and displays Turkish subtitles. Install PortAudio, ffmpeg, BlackHole 2ch, and
+BlackHole 16ch separately, then create the `Zoom Incoming Monitor` Multi-Output
+device described in `docs/MAC_AUDIO_ROUTING.md`. Put the DeepL key only in the
+ignored local `.env` file; never commit or paste it into logs:
+
+```text
+DEEPL_API_KEY=your_actual_deepl_api_key_here
+```
+
+The remaining installation instructions describe the preserved Windows path.
+
+For the primary Mac profile, set Zoom devices to:
+
+```text
+Microphone: BlackHole 2ch
+Speaker: Zoom Incoming Monitor
+```
+
+The Multi-Output device lets you hear the remote participant through the
+MacBook speakers while BlackHole 16ch provides the separate subtitle input.
+Never use BlackHole 2ch as the Zoom speaker.
+
+### Data handling
+
+- Microphone and conference audio are processed locally by the selected STT
+  backends and are not uploaded by this application.
+- Only recognized text is sent to DeepL for translation.
+- When Edge TTS is selected, translated text is sent to the Edge speech service
+  to synthesize outgoing audio. Windows SAPI runs locally.
+- Temporary synthesized audio is kept under `tmp/` and removed after playback.
+- `.env`, logs, benchmark recordings/results, model files, caches, and virtual
+  environments must remain untracked.
+
+### Windows installation
+
+#### 1. Install VB-Audio Virtual Cable
 
 1. Download VB-CABLE from [vb-audio.com](https://vb-audio.com/Cable/)
 2. Run the installer (requires admin privileges)
@@ -39,7 +110,7 @@ A Windows Python application that translates Turkish speech to English audio in 
    - You should see "CABLE Input (VB-Audio Virtual Cable)" as a playback device
    - You should see "CABLE Output (VB-Audio Virtual Cable)" as a recording device
 
-### 2. Install Visual C++ Build Tools (Required)
+#### 2. Install Visual C++ Build Tools (when required)
 
 The `av` package (dependency of faster-whisper) requires Visual C++ Build Tools on Windows.
 
@@ -60,7 +131,7 @@ The `av` package (dependency of faster-whisper) requires Visual C++ Build Tools 
 pip install av --only-binary :all:
 ```
 
-### 3. Set Up Python Environment
+#### 3. Set Up Python Environment
 
 ```powershell
 # Create virtual environment
@@ -79,7 +150,7 @@ pip install -r requirements.txt
 - Or try: `pip install av --only-binary :all:` to use pre-built wheel
 - Or install manually: `pip install av` after installing build tools
 
-### 4. Configure the Application
+#### 4. Configure the Application
 
 1. **Copy configuration files:**
    ```powershell
@@ -97,7 +168,7 @@ pip install -r requirements.txt
    - Verify `audio.output.name_substring` is "CABLE Input" (default)
    - Adjust other settings as needed (see config.yaml.example for details)
 
-### 5. Configure Zoom
+#### 5. Configure Zoom
 
 1. Open Zoom Settings → Audio
 2. **Microphone:** Select "CABLE Output (VB-Audio Virtual Cable)"
@@ -106,9 +177,17 @@ pip install -r requirements.txt
 
 ## Quick Start
 
+Activate the environment first. On macOS:
+
+```bash
+source .venv/bin/activate
+```
+
+On Windows, activate `venv` as described above.
+
 ### 1. List Audio Devices
 
-```powershell
+```bash
 python -m src.main --mode list-devices
 ```
 
@@ -117,22 +196,40 @@ This shows all input/output devices with indices. Use this to find the correct d
 ### 2. Test Audio Routing
 
 **Test beep (validates routing):**
-```powershell
+```bash
 python -m src.main --mode beep
 ```
 
 Check Zoom's microphone meter - it should move when the beep plays.
 
 **Test TTS:**
-```powershell
+```bash
 python -m src.main --mode test
 ```
 
 This plays "This is a test of the translation system. One, two, three." through the virtual cable.
 
-### 3. Run Live Translation
+### 3. Run the bidirectional GUI
 
-```powershell
+```bash
+python -m src.main --mode gui
+```
+
+Press **OTURUMU BAŞLAT**. The left card shows your detected Turkish and the
+English sent to the conference; the right card shows detected remote English
+and its Turkish translation. The subtitle checkbox controls the always-on-top
+overlay. Stopping the session drains accepted speech before workers exit.
+
+For Zoom on the primary Mac profile, select:
+
+```text
+Microphone: BlackHole 2ch
+Speaker: Zoom Incoming Monitor
+```
+
+### 4. Run outgoing translation without the GUI
+
+```bash
 python -m src.main --mode live
 ```
 
@@ -148,16 +245,16 @@ Or use the batch file:
 - English audio will be sent to Zoom
 - Turkish and English text will be printed to console (for manual fallback)
 
-### 4. Dry Run Mode (Text Input)
+### 5. Dry Run Mode (Text Input)
 
 Test translation without microphone:
 
-```powershell
+```bash
 python -m src.main --mode dryrun --text "Merhaba, nasılsınız?"
 ```
 
 Or pipe text:
-```powershell
+```bash
 echo "Merhaba, nasılsınız?" | python -m src.main --mode dryrun
 ```
 
@@ -165,33 +262,37 @@ echo "Merhaba, nasılsınız?" | python -m src.main --mode dryrun
 
 ### How It Works
 
-```
-Your Microphone → App captures audio
-                ↓
-         [STT + Translate + TTS]
-                ↓
-    CABLE Input (Playback Device)
-                ↓
-    Virtual Cable (internal routing)
-                ↓
-    CABLE Output (Recording Device)
-                ↓
-         Zoom Microphone Input
+```text
+macOS outgoing:
+MacBook microphone → TR STT → EN translation → EN TTS
+    → BlackHole 2ch → Zoom microphone
+
+macOS incoming:
+Zoom speaker → Zoom Incoming Monitor
+    ├─ MacBook speakers/headphones
+    └─ BlackHole 16ch → EN STT → TR translation → subtitles
+
+Windows outgoing:
+Microphone → TR STT → EN translation → SAPI/Edge TTS
+    → CABLE Input → CABLE Output → Zoom microphone
 ```
 
 ### Device Mapping
 
-| Component | Device Name |
-|-----------|-------------|
-| **App writes to** | `CABLE Input (VB-Audio Virtual Cable)` |
-| **Zoom reads from** | `CABLE Output (VB-Audio Virtual Cable)` |
-| **Your speakers** | Your normal headset/speakers (NOT the cable) |
+| Platform/path | Application device | Conference device |
+| --- | --- | --- |
+| macOS outgoing | output `BlackHole 2ch` | microphone `BlackHole 2ch` |
+| macOS incoming | input `BlackHole 16ch` | speaker `Zoom Incoming Monitor` |
+| Windows outgoing | output `CABLE Input` | microphone `CABLE Output` |
 
 ### Important Notes
 
 - **Use headphones/headset** to prevent feedback loops
-- **Do NOT** set Zoom speaker to the virtual cable
-- The virtual cable is a **one-way** audio path: App → Cable → Zoom
+- On macOS, do **not** set the Zoom speaker to BlackHole 2ch or add BlackHole
+  2ch to `Zoom Incoming Monitor`.
+- On Windows, do **not** set the Zoom speaker to VB-CABLE.
+- See [`docs/MAC_AUDIO_ROUTING.md`](docs/MAC_AUDIO_ROUTING.md) for the verified
+  Mac topology and feedback-loop precautions.
 
 ## Configuration
 
@@ -226,15 +327,31 @@ tts:
 
 ```yaml
 stt:
-  model: "small"  # tiny, base, small, medium, large
-  compute_type: "int8"  # int8, float16, float32
-  device: "cpu"  # cpu or cuda
+  backend: "faster-whisper"
+  model: "small"
+  compute_type: "int8"
+  device: "cpu"
 ```
 
-- Smaller models = faster, less accurate
-- Larger models = slower, more accurate
-- `int8` = faster, lower quality
-- `cuda` = GPU acceleration (if available)
+For Apple Silicon, the checked-in primary profile uses:
+
+```yaml
+stt:
+  backend: "mlx-whisper"
+  model: "mlx-community/whisper-large-v3-turbo"
+  language: "tr"
+  beam_size: 1
+```
+
+MLX is macOS/Apple-Silicon-only and does not silently fall back. Faster Whisper
+remains the cross-platform reference backend and supports CPU/CUDA settings.
+
+### Incoming subtitles
+
+`incoming_subtitles.enabled` controls the independent EN→TR subtitle channel.
+The example configuration leaves it disabled for compatibility. The primary
+Mac profile enables BlackHole 16ch capture and stereo-to-mono mixing. Always use
+a different virtual device from the outgoing audio route.
 
 ### VAD Settings
 
@@ -293,6 +410,21 @@ vad:
 2. Run `--mode beep` and check if meter moves
 3. Check Windows Sound Settings → Recording → CABLE Output → Properties → Levels (should be > 0)
 4. Ensure app is writing to "CABLE Input" (check logs)
+
+On macOS, verify that Zoom's microphone is `BlackHole 2ch`, the application
+output resolves to `BlackHole 2ch`, and the Zoom microphone meter moves during
+`--mode beep` or `--mode test`.
+
+### No incoming Turkish subtitles on macOS
+
+1. Verify Zoom's speaker is `Zoom Incoming Monitor`.
+2. Verify that the Multi-Output device contains MacBook speakers (primary) and
+   BlackHole 16ch with drift correction, but does not contain BlackHole 2ch.
+3. Run `python -m src.main --mode list-devices` and confirm BlackHole 16ch is
+   available as an input.
+4. Confirm `incoming_subtitles.enabled: true` and its input device is
+   `BlackHole 16ch`.
+5. Check the GUI session log and `logs/app.log` for capture, STT, or DeepL errors.
 
 ### Sample Rate Mismatch
 
@@ -374,24 +506,26 @@ Should print `True`. If it prints `False`, the package is still outdated.
 3. Reduce `max_segment_duration_ms` to process shorter segments
 4. Check internet speed (affects DeepL API)
 
-## Interview Operating Procedure
+## Meeting Operating Procedure
 
 ### Before the Interview
 
 1. **Test everything:**
-   ```powershell
-   python -m src.main --mode beep      # Verify routing
-   python -m src.main --mode test      # Verify TTS
+
+   ```bash
+   python -m src.main --mode list-devices
+   python -m src.main --mode beep
+   python -m src.main --mode test
    ```
 
 2. **Check Zoom:**
-   - Microphone = CABLE Output
-   - Speaker = Your headset (NOT cable)
+   - macOS: Microphone = BlackHole 2ch; Speaker = Zoom Incoming Monitor
+   - Windows: Microphone = CABLE Output; Speaker = Your headset (NOT cable)
    - Test microphone in Zoom settings
 
 3. **Start the app:**
-   ```powershell
-   python -m src.main --mode live
+   ```bash
+   python -m src.main --mode gui
    ```
 
 ### During the Interview
@@ -402,9 +536,10 @@ Should print `True`. If it prints `False`, the package is still outdated.
    - Wait for processing (watch console output)
 
 2. **Monitor output:**
-   - Console shows: `[TURKISH] ...` and `[ENGLISH] ...`
+   - The left card shows your Turkish and outgoing English.
+   - The right card and overlay show incoming English and Turkish subtitles.
    - Check Zoom microphone meter moves
-   - Listen for English audio in Zoom
+   - Ask the remote participant to confirm the English audio
 
 3. **If something fails:**
    - App prints English text to console
@@ -419,44 +554,36 @@ Should print `True`. If it prints `False`, the package is still outdated.
 
 ### After the Interview
 
-- Press `Ctrl+C` to stop the app
+- Press **OTURUMU DURDUR** and wait for accepted queues to drain
 - Check `logs/app.log` for any errors
-- Review console output for translation quality
+- Review both transcript cards for translation quality
 
-## Architecture: Pluggable TTS
+## Architecture and backend boundaries
 
-The code is designed for easy TTS engine swapping. To add voice cloning later:
+The synchronous compatibility path and the bounded live worker path use the same
+backend contracts. `BackendFactory` lazily selects STT, translation, audio input,
+and audio output implementations. TTS retains its existing engine interface.
+Platform capability checks are isolated in `RuntimePlatform`.
 
-1. **Implement `CloneTTSEngine`** inheriting from `TTSEngine`:
-   ```python
-   class CloneTTSEngine(TTSEngine):
-       def synthesize_to_wav(self, text, wav_path, sample_rate):
-           # Your voice cloning implementation
-           pass
-   ```
+- Outgoing live stages: STT → translation → TTS → blocking playback.
+- Incoming live stages: English STT → Turkish translation → GUI signal.
+- All stage queues are bounded and preserve FIFO order.
+- Normal stop drains accepted speech; saturation fails visibly instead of
+  clearing important queued audio.
+- macOS-specific MLX and routing behavior remains behind backend/configuration
+  boundaries, preserving the Windows Faster Whisper/SAPI/VB-CABLE path.
 
-2. **Update `pipeline.py`** to instantiate your engine:
-   ```python
-   elif engine_name == 'clone':
-       self.tts = CloneTTSEngine(...)
-   ```
-
-3. **Set config:**
-   ```yaml
-   tts:
-     engine: "clone"
-   ```
-
-The interface is defined in `src/tts_base.py` - all TTS engines must implement:
-- `synthesize_to_wav(text, wav_path, sample_rate)` → bool
-- `is_available()` → bool
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the complete runtime
+flow and [`docs/MAC_V2_PLAN.md`](docs/MAC_V2_PLAN.md) for migration evidence.
 
 ## File Structure
 
 ```
 zoom_live_translate/
 ├── README.md                 # This file
-├── requirements.txt          # Python dependencies
+├── requirements.txt          # Preserved Windows dependencies
+├── requirements-macos-stt.txt # Apple Silicon STT layer
+├── requirements-macos-app.txt # macOS application/GUI layer
 ├── .env.example             # Environment variables template
 ├── config.yaml.example      # Configuration template
 ├── run.bat                  # Quick launcher
@@ -469,13 +596,19 @@ zoom_live_translate/
 │   ├── audio_out.py         # Audio output streaming
 │   ├── vad.py               # Voice Activity Detection
 │   ├── stt_whisper.py       # Speech-to-Text (faster-whisper)
+│   ├── stt_mlx.py           # Apple Silicon MLX Whisper backend
 │   ├── translate_deepl.py   # Translation (DeepL API)
 │   ├── tts_base.py          # TTS base interface
 │   ├── tts_sapi.py          # Windows SAPI TTS
 │   ├── tts_edge.py          # Edge TTS (optional)
-│   ├── tts_clone_stub.py    # Voice cloning stub
-│   ├── pipeline.py          # Main pipeline orchestration
+│   ├── backend_factory.py   # Lazy backend selection
+│   ├── pipeline.py          # Outgoing pipeline orchestration
+│   ├── pipeline_runtime.py  # Bounded ordered live workers
+│   ├── incoming_subtitles.py # Incoming subtitle-only pipeline
+│   ├── ui/                  # Bidirectional GUI and overlay
 │   └── utils.py             # Utility functions
+├── docs/                    # Architecture, benchmarks, routing, plan
+├── tests/                   # Deterministic regression suite
 ├── logs/                    # Created at runtime
 │   └── app.log              # Application logs
 └── tmp/                     # Created at runtime
@@ -500,28 +633,29 @@ logging:
 
 ## Error Handling
 
-The app is designed to be resilient:
+The app makes failures visible while preserving accepted audio:
 
 - **Translation errors:** Prints Turkish + English (if any) to console, continues running
 - **TTS errors:** Prints English text for manual copy/paste, continues running
 - **STT errors:** Logs warning, skips segment, continues listening
-- **Audio errors:** Logs error, attempts to recover
+- **Audio/backpressure errors:** Logs the failure and stops rather than silently
+  deleting queued speech
 
 The app **does not crash** on individual segment failures - it logs errors and continues processing.
 
 ## Performance
 
-Typical latency per segment:
-- **STT:** 1-3 seconds (depends on model and hardware)
-- **Translation:** 0.5-2 seconds (depends on API and internet)
-- **TTS:** 0.5-1.5 seconds (depends on text length)
-- **Total:** 2-6 seconds per segment
+Performance depends on model load state, utterance length, network latency, TTS
+audio duration, and the selected hardware backend. The repository records actual
+model load time, inference time, RTF, WER/CER, and integration measurements in
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Do not compare backends using
+different audio or normalization.
 
-For best performance:
-- Use GPU acceleration for STT (`device: "cuda"`)
-- Use smaller STT model ("tiny" or "base")
-- Ensure stable internet connection
-- Keep segments short (speak 1-2 sentences, pause)
+On the verified primary Mac profile, outgoing live acceptance completed without
+queue drops; its blocking playback dominated the measured 7.290-second segment.
+The incoming local routing acceptance completed one English→Turkish subtitle
+segment in 1.326 seconds after stereo mixing. These are bounded integration
+checks, not sustained Zoom or thermal benchmarks.
 
 ## License
 
@@ -538,4 +672,3 @@ For issues:
 ---
 
 **Good luck with your interview!** 🎤🎯
-

@@ -136,3 +136,19 @@ human-perceived end-to-end latency.
 | Date | Path | Format | Active duration | Queue high-water/final | Overflows | Underflows | Dropped chunks | Source RMS/peak | Loopback RMS/peak | Capture-to-playback timestamps | Notes |
 | --- | --- | --- | ---: | --- | --- | --- | ---: | --- | --- | --- | --- |
 | 2026-09-21 | MacBook Pro Mikrofonu -> BlackHole 2ch output -> BlackHole 2ch input | 48 kHz, float32, mono -> stereo, 480-frame blocks | 10.009 s | 6/0 blocks | input 0; loopback input 0; queue 0 | output 0; active queue 0 | 0 | 0.00371006/0.02991113 | 0.00367019/0.02991113 | mean 81.033 ms; min 81.023 ms; max 81.043 ms; n=1,007 | Raw bounded routing PASS; 483,360 captured/submitted frames; post-output loopback RMS/peak ratios 0.989252/1.000000; no recording, speakers, system-default changes, STT, translation, or TTS |
+
+### Incoming subtitle acceptance (2026-09-22)
+
+A fixed local macOS `say` utterance, “Hello, this is the incoming English
+channel test,” was played through `Zoom Incoming Monitor`. The Multi-Output
+device sent it to the MacBook speakers and BlackHole 16ch; the application
+captured BlackHole 16ch at 48 kHz stereo, mixed it to mono in memory, and ran
+Faster Whisper small followed by DeepL EN-to-TR. STT returned the exact English
+sentence. Translation returned `Merhaba, bu, gelen İngilizce kanalının test
+yayınıdır.` STT took 0.779 s, translation 0.753 s, and segment completion took
+1.532 s. One segment completed with zero failures, overloads, cancellations, or
+capture drops; both queues drained and both workers stopped. Temporary test
+audio was deleted. This is a routing/integration acceptance, not a quality
+benchmark or a real Zoom call. The final post-mix repeat again produced the
+exact English transcript and the same Turkish translation with 1.326 s total
+segment completion.

@@ -44,12 +44,27 @@ class BackendFactory:
         self.config = config
         self.runtime_platform = runtime_platform or RuntimePlatform.detect()
 
-    def create_audio_input(self) -> AudioInputBackend:
+    def create_audio_input(
+        self,
+        input_config: Optional[dict] = None,
+        *,
+        audio_config: Optional[dict] = None,
+        pipeline_config: Optional[dict] = None,
+    ) -> AudioInputBackend:
         """Create the existing sounddevice input implementation."""
         find_device = _load_symbol(".devices", "find_device")
         audio_input_class = _load_symbol(".audio_in", "AudioInput")
-        input_config = self.config.audio_input
-        audio_config = self.config.get("audio", {})
+        input_config = (
+            self.config.audio_input if input_config is None else input_config
+        )
+        audio_config = (
+            self.config.get("audio", {}) if audio_config is None else audio_config
+        )
+        pipeline_config = (
+            self.config.pipeline_config
+            if pipeline_config is None
+            else pipeline_config
+        )
 
         input_idx = find_device(
             name_substring=input_config.get("name_substring", ""),
@@ -67,9 +82,10 @@ class BackendFactory:
         audio_input = audio_input_class(
             device_index=input_idx,
             sample_rate=input_sr,
-            channels=1,
+            channels=input_config.get("channels", 1),
             dtype="int16",
-            blocksize=self.config.pipeline_config.get("audio_buffer_size", 4800),
+            blocksize=pipeline_config.get("audio_buffer_size", 4800),
+            mix_to_mono=input_config.get("mix_to_mono", False),
         )
         return audio_input
 
@@ -101,10 +117,10 @@ class BackendFactory:
         )
         return audio_output
 
-    def create_vad(self, sample_rate: int):
+    def create_vad(self, sample_rate: int, vad_config: Optional[dict] = None):
         """Create the unchanged VAD implementation from compatible config keys."""
         vad_class = _load_symbol(".vad", "VAD")
-        vad_config = self.config.vad_config
+        vad_config = self.config.vad_config if vad_config is None else vad_config
         silence_ms = (
             vad_config.get("silence_threshold_ms")
             or vad_config.get("silence_ms")
@@ -137,9 +153,9 @@ class BackendFactory:
         )
         return vad
 
-    def create_stt(self) -> SpeechToTextBackend:
+    def create_stt(self, stt_config: Optional[dict] = None) -> SpeechToTextBackend:
         """Create the configured STT backend; faster-whisper remains the default."""
-        stt_config = self.config.stt_config
+        stt_config = self.config.stt_config if stt_config is None else stt_config
         backend_name = stt_config.get("backend", "faster-whisper").lower()
         logger.info("Selecting STT backend: %s", backend_name)
         if backend_name in {"faster-whisper", "whisper"}:
@@ -166,9 +182,16 @@ class BackendFactory:
             )
         raise ValueError(f"Unknown STT backend: {backend_name}")
 
-    def create_translator(self) -> TranslatorBackend:
+    def create_translator(
+        self,
+        translate_config: Optional[dict] = None,
+    ) -> TranslatorBackend:
         """Create the configured translator; DeepL remains the default."""
-        translate_config = self.config.translate_config
+        translate_config = (
+            self.config.translate_config
+            if translate_config is None
+            else translate_config
+        )
         backend_name = translate_config.get("backend", "deepl").lower()
         if backend_name != "deepl":
             raise ValueError(f"Unknown translator backend: {backend_name}")
