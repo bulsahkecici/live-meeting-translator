@@ -141,17 +141,30 @@ class BackendFactory:
         """Create the configured STT backend; faster-whisper remains the default."""
         stt_config = self.config.stt_config
         backend_name = stt_config.get("backend", "faster-whisper").lower()
-        if backend_name not in {"faster-whisper", "whisper"}:
-            raise ValueError(f"Unknown STT backend: {backend_name}")
-
-        stt_class = _load_symbol(".stt_whisper", "STTWhisper")
-        return stt_class(
-            model=stt_config.get("model", "small"),
-            compute_type=stt_config.get("compute_type", "int8"),
-            device=stt_config.get("device", "cpu"),
-            language=stt_config.get("language", "tr"),
-            beam_size=stt_config.get("beam_size", 1),
-        )
+        logger.info("Selecting STT backend: %s", backend_name)
+        if backend_name in {"faster-whisper", "whisper"}:
+            stt_class = _load_symbol(".stt_whisper", "STTWhisper")
+            return stt_class(
+                model=stt_config.get("model", "small"),
+                compute_type=stt_config.get("compute_type", "int8"),
+                device=stt_config.get("device", "cpu"),
+                language=stt_config.get("language", "tr"),
+                beam_size=stt_config.get("beam_size", 1),
+            )
+        if backend_name == "mlx-whisper":
+            if not self.runtime_platform.is_apple_silicon:
+                raise RuntimeError(
+                    "The mlx-whisper STT backend requires Apple Silicon macOS"
+                )
+            stt_class = _load_symbol(".stt_mlx", "MLXWhisperBackend")
+            return stt_class(
+                model=stt_config.get(
+                    "model", "mlx-community/whisper-small-mlx"
+                ),
+                language=stt_config.get("language", "tr"),
+                beam_size=stt_config.get("beam_size", 1),
+            )
+        raise ValueError(f"Unknown STT backend: {backend_name}")
 
     def create_translator(self) -> TranslatorBackend:
         """Create the configured translator; DeepL remains the default."""

@@ -1,9 +1,9 @@
 ﻿audio:
   input:
-    name_substring: "Mikrofon"
+    name_substring: "MacBook Pro Mikrofonu"
     index_override: null
   output:
-    name_substring: "CABLE Input"
+    name_substring: "BlackHole 2ch"
     index_override: null
   input_sample_rate: 16000
   output_sample_rate: 48000
@@ -16,9 +16,8 @@ vad:
   aggressiveness: 2
 
 stt:
-  model: "small"
-  compute_type: "float32"
-  device: "cuda"
+  backend: "mlx-whisper"
+  model: "mlx-community/whisper-large-v3-turbo"
   language: "tr"
   beam_size: 1
 

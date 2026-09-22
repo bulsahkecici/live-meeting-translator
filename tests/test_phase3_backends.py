@@ -391,7 +391,15 @@ class ImportIsolationTests(unittest.TestCase):
 import importlib.abc
 import sys
 
-blocked = {"faster_whisper", "requests", "cachetools", "edge_tts", "webrtcvad"}
+blocked = {
+    "faster_whisper",
+    "mlx",
+    "mlx_whisper",
+    "requests",
+    "cachetools",
+    "edge_tts",
+    "webrtcvad",
+}
 
 class Blocker(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):

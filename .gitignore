@@ -55,3 +55,5 @@ desktop.ini
 # Project specific
 *.wav
 *.mp3
+benchmarks/local_stt_audio/
+benchmarks/local_stt_results/

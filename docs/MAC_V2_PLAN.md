@@ -1,6 +1,8 @@
 # macOS V2 Migration Plan
 
-Statuses use `COMPLETE` or `PENDING`. Repository scaffolding and the macOS environment/bootstrap baseline are complete; no later-phase runtime technology is claimed installed or working.
+Statuses use `COMPLETE` or `PENDING`. Phases 0–4 are complete: repository
+scaffolding, the macOS bootstrap and audio-routing baselines, backend abstraction,
+and measured Apple Silicon MLX Whisper support. Later phases remain unimplemented.
 
 ## PHASE 0 — Codex/repository development scaffolding
 
@@ -119,7 +121,65 @@ The serial stage order, blocking playback, `run_live()` loop, queue overflow pol
 
 **Risks:** Model download size, unsupported Python version, backend API churn, Metal memory pressure, and quality regression.
 
-**Status:** PENDING
+**Status:** COMPLETE
+
+### Phase 4 implementation and evidence (2026-09-22)
+
+`MLXWhisperBackend` implements the unchanged `SpeechToTextBackend` contract on
+Apple Silicon. It accepts the pipeline's mono PCM16 bytes, performs any 16 kHz
+resampling in memory, preloads the exact configured MLX model, and returns text
+without an intermediate audio file. Factory selection is explicit through
+`stt.backend: mlx-whisper`; missing selectors still choose Faster Whisper, and
+there is no silent backend or model fallback. Non-Apple-Silicon MLX selection
+fails clearly. Faster Whisper and its Windows CPU/CUDA behavior remain intact.
+
+The Phase 4 environment used Python 3.11.16 on a MacBook Pro with Apple M5 Max
+(18 cores) and 36 GB unified memory. Direct STT pins are `mlx-whisper==0.4.3`
+and `faster-whisper==1.2.1`; `pip check` passed. MLX 0.4.3 accepts an in-memory
+NumPy waveform but does not implement beam search, so `beam_size: 1` is mapped
+to explicit temperature-zero greedy decoding and other values are rejected.
+
+A local-only corpus contains ten prompted Turkish utterances from one speaker,
+69.000 seconds total, stored under the ignored `benchmarks/local_stt_audio/`.
+The same 16 kHz mono PCM16 files were used for all models. Each timed run used a
+fresh process, an already downloaded offline cache, a separate model-load timer,
+one excluded warm-up inference, and no backend VAD. Normalization is NFC,
+Turkish-aware lowercase, punctuation removal, and whitespace collapse; Turkish
+diacritics remain significant. Aggregate results were:
+
+| Backend | Model | Device/dtype | Load | Inference | RTF | WER | CER |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Faster Whisper | `small` | CPU/int8 | 0.297 s | 7.943 s | 0.1151 | 0.4500 | 0.1675 |
+| MLX Whisper | `mlx-community/whisper-small-mlx` | Metal/float16 | 0.120 s | 0.665 s | 0.0096 | 0.4500 | 0.1658 |
+| MLX Whisper | `mlx-community/whisper-large-v3-turbo` | Metal/float16 | 0.062 s | 1.221 s | 0.0177 | 0.3000 | 0.1215 |
+
+The small-model comparison answers backend parity only: MLX small used about
+one-twelfth the inference time of Faster Whisper small with effectively equal
+WER/CER on this corpus. The Turbo comparison answers practical Mac model
+selection: it was about 1.8 times slower than MLX small but remained comfortably
+faster than real time and reduced WER from 0.45 to 0.30 and CER from about 0.166
+to 0.122. Turbo is therefore selected in the explicit primary-Mac deployment
+profile. The factory compatibility default remains Faster Whisper for existing
+selector-free and Windows configurations. Full Turbo latency and memory were
+acceptable for this bounded test, so no 4-bit model was downloaded.
+
+### macOS STT default decision
+
+The checked-in `config.yaml` is the deployment profile for this repository's
+primary Apple Silicon Mac. It selects the built-in MacBook Pro microphone,
+BlackHole 2ch output, and `mlx-community/whisper-large-v3-turbo`. This is an
+explicit configuration choice rather than platform inference: removing the STT
+selector still yields Faster Whisper, and the cross-platform example continues
+to document Faster Whisper as the compatible baseline. Windows CPU/CUDA, SAPI,
+and VB-CABLE implementations remain available.
+
+Limitations: this is one speaker and one run per model; files include fixed
+post-utterance silence; load times are warm filesystem-cache measurements rather
+than cold application startup; Faster uses `beam_size=1` while MLX uses greedy
+decoding; and WER/CER count semantically equivalent numeric formatting such as
+`on iki virgül beş` versus `12,5` as errors. Detailed per-utterance results and
+transcripts are in `docs/BENCHMARKS.md`; local audio and JSON reports remain
+ignored and uncommitted.
 
 ## PHASE 5 — pipeline concurrency
 

@@ -1,10 +1,10 @@
 # Architecture
 
-## CURRENT ARCHITECTURE — PHASE 3
+## CURRENT ARCHITECTURE — PHASE 4
 
-This section describes the code currently present in `src/`. Phase 3 introduces
-backend and platform boundaries while deliberately preserving the synchronous
-pipeline and the existing concrete implementations.
+This section describes the code currently present in `src/`. Phase 4 adds an
+explicit Apple Silicon MLX Whisper implementation behind the Phase 3 STT
+boundary while preserving the synchronous pipeline and Faster Whisper default.
 
 ### Current runtime flow
 
@@ -17,7 +17,7 @@ flowchart TD
     Components --> Pipeline["TranslationPipeline"]
     Worker --> Pipeline
     Factory --> Input["AudioInput / sounddevice InputStream"]
-    Factory --> STT["STTWhisper / faster-whisper"]
+    Factory --> STT["STT backend: faster-whisper or MLX Whisper"]
     Factory --> DeepL["DeepLTranslator / DeepL Free API"]
     Factory --> TTS["TTSEngine: SAPI, Edge, or clone stub"]
     Pipeline --> Input
@@ -46,6 +46,8 @@ In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunk
 | `src/backend_interfaces.py` | Minimal ABC contracts for STT, translation, audio input, and audio output |
 | `src/backend_factory.py` | Lazily maps compatible configuration to current concrete components |
 | `src/runtime_platform.py` | Pure, testable OS/architecture capabilities and virtual-routing hints |
+| `src/stt_mlx.py` | Apple Silicon MLX Whisper adapter with in-memory PCM conversion |
+| `src/stt_metrics.py` | Turkish-aware normalization plus deterministic WER/CER helpers |
 | `src/config.py` | Loads YAML and reads `DEEPL_API_KEY` from the environment via dotenv |
 | `src/devices.py` | Enumerates `sounddevice` devices and selects by index, substring, or default |
 | `src/audio_in.py` | Callback-based input stream and bounded in-memory chunk queue |
@@ -71,7 +73,17 @@ In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunk
 
 ### STT
 
-`SpeechToTextBackend` defines only `transcribe(audio_bytes, sample_rate)`. The current `STTWhisper` implementation satisfies that contract and directly constructs `faster_whisper.WhisperModel`. It remains Turkish by default, converts input to 16 kHz with linear interpolation when needed, and preserves its CPU/CUDA and compute-type fallback behavior. Concrete imports and model construction occur only when the factory selects this backend.
+`SpeechToTextBackend` defines only `transcribe(audio_bytes, sample_rate)`.
+`STTWhisper` remains the default/reference implementation and directly constructs
+`faster_whisper.WhisperModel`; its Turkish, CPU/CUDA, compute-type fallback, and
+in-memory 16 kHz conversion behavior are unchanged. `MLXWhisperBackend` is an
+explicit Apple Silicon-only alternative. It converts the same mono PCM16 bytes
+to a normalized NumPy waveform, resamples in memory when needed, preloads the
+exact configured MLX model, and calls `mlx_whisper.transcribe` without a temporary
+WAV. `mlx-whisper 0.4.3` has no beam-search decoder, so configured `beam_size: 1`
+maps explicitly to temperature-zero greedy decoding; other beam sizes fail
+clearly. Concrete imports and model construction remain lazy, and selecting MLX
+never silently falls back to Faster Whisper or changes the model identifier.
 
 ### Translation
 
@@ -91,7 +103,7 @@ TTS retains the existing `TTSEngine` abstract base; no redundant TTS interface w
 
 ### Configuration
 
-`Config` loads `config.yaml` by default and overlays only the `DEEPL_API_KEY` environment value. Existing files without backend selectors remain valid: the factory defaults `stt.backend` to `faster-whisper`, `translate.backend` to `deepl`, and continues using the existing `tts.engine` values. Older sample-rate and VAD keys remain accepted. Invalid explicit backend names fail with a clear error. The application still does not validate the complete schema before component construction.
+`Config` loads `config.yaml` by default and overlays only the `DEEPL_API_KEY` environment value. The checked-in deployment profile now explicitly targets the primary Mac with the built-in microphone, BlackHole output, and `mlx-community/whisper-large-v3-turbo`. The cross-platform example and existing files without backend selectors remain compatible: the factory still defaults `stt.backend` to `faster-whisper`, `translate.backend` to `deepl`, and continues using the existing `tts.engine` values. Explicit `stt.backend: mlx-whisper` requires Apple Silicon macOS and an MLX-format model identifier. Older sample-rate and VAD keys remain accepted. Invalid explicit backend names fail with a clear error. The application still does not validate the complete schema before component construction.
 
 ### Error handling
 
@@ -107,15 +119,15 @@ Component initialization generally raises to `main.py`, which logs and exits. Ru
 
 ### Current platform handling
 
-`RuntimePlatform` normalizes macOS, Windows, Linux, and other systems and exposes deterministic facts for Apple Silicon, SAPI support, CUDA configuration relevance, and the expected virtual-routing family (`blackhole` or `vb-cable`). These hints do not override user device configuration. Platform capability is currently used only to prevent invalid non-Windows SAPI selection/fallback.
+`RuntimePlatform` normalizes macOS, Windows, Linux, and other systems and exposes deterministic facts for Apple Silicon, SAPI support, CUDA configuration relevance, and the expected virtual-routing family (`blackhole` or `vb-cable`). These hints do not override user device configuration. Platform capability prevents invalid non-Windows SAPI selection/fallback and gates the MLX Whisper backend to Apple Silicon macOS.
 
 Remaining platform assumptions are:
 
 - Documentation, `install.bat`, and `run.bat` target Windows and PowerShell.
 - SAPI through `System.Speech` remains the default TTS and Windows fallback.
-- The configured output name defaults to VB-CABLE's `CABLE Input`; `devices.txt` records Windows MME, DirectSound, WASAPI, and WDM-KS devices.
+- The cross-platform example still defaults to VB-CABLE's `CABLE Input`; `devices.txt` records Windows MME, DirectSound, WASAPI, and WDM-KS devices.
 - Installation guidance includes Visual C++ Build Tools and a CUDA 11.8 PyTorch index.
-- The current STT implementation exposes CPU/CUDA only; there is no Core ML, Metal, or MLX implementation.
+- Faster Whisper retains its CPU/CUDA paths; the MLX Whisper implementation is isolated to Apple Silicon/Metal and does not carry CUDA assumptions.
 - Edge TTS conversion assumes `ffmpeg` is available to `pydub` when MP3 conversion is needed.
 - Dependency pins and the UTF-16-generated `requirements_freeze.txt` reflect a Windows environment and have not been validated for Python 3.14 or Apple Silicon.
 
@@ -128,13 +140,14 @@ Remaining platform assumptions are:
 - No non-Windows TTS fallback exists; an unavailable engine fails startup explicitly outside Windows.
 - Queue depth and capture-to-playback latency are not recorded as first-class metrics.
 - GUI subtitle updates depend on parsing log text rather than structured events.
-- Automated tests cover the backend contracts, factory, platform policy, import isolation, and Phase 2 diagnostic logic, but not real model/network/TTS execution or Windows SAPI.
+- Automated tests cover the backend contracts, MLX waveform conversion, factory and platform policy, import isolation, Turkish WER/CER logic, and Phase 2 diagnostics. Phase 4 also has one local real-speech benchmark on Apple M5 Max, but no Windows SAPI, translation-network, TTS, or end-to-end meeting validation.
 
 ## BACKEND STATUS
 
 ### IMPLEMENTED NOW
 
 - `SpeechToTextBackend` → `STTWhisper` using faster-whisper.
+- `SpeechToTextBackend` → `MLXWhisperBackend` using `mlx-whisper` on Apple Silicon.
 - `TranslatorBackend` → `DeepLTranslator` using the DeepL Free endpoint.
 - Existing `TTSEngine` → `SapiTTSEngine`, `EdgeTTSEngine`, or the existing unavailable `CloneTTSEngineStub`.
 - `AudioInputBackend` / `AudioOutputBackend` → existing sounddevice implementations.
@@ -147,13 +160,15 @@ ABC for TTS. This keeps the boundary explicit without adding a framework.
 
 ### FUTURE BACKENDS — NOT IMPLEMENTED
 
-- Apple Silicon MLX Whisper or another measured STT candidate.
+- Streaming/incremental STT and any automatic backend fallback policy.
 - Local or hybrid LLM translation.
 - A local or streaming macOS-capable TTS implementation.
 
-No future backend package, placeholder implementation, model, or dependency is
-added by Phase 3.
+The factory compatibility default remains Faster Whisper. The primary Mac
+deployment profile explicitly selects `mlx-community/whisper-large-v3-turbo`;
+Windows and selector-free configurations retain Faster Whisper. See
+`docs/BENCHMARKS.md`.
 
 ## PROPOSED V2 DIRECTION
 
-The remaining direction is to preserve the Windows implementation while adding measured platform-specific backends, then bounded stage queues/workers with explicit backpressure, ordered output, observability, and clean shutdown. macOS audio routing has a Phase 2 diagnostic baseline; Apple Silicon STT, local or streaming TTS, and optional local/hybrid translation remain candidates for later phases. See `docs/MAC_V2_PLAN.md`.
+The remaining direction is to preserve the Windows implementation while introducing bounded stage queues/workers with explicit backpressure, ordered output, observability, and clean shutdown. Streaming STT, local or streaming TTS, and optional local/hybrid translation remain later work. See `docs/MAC_V2_PLAN.md`.

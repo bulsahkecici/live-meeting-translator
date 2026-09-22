@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "language": "tr",
+  "items": [
+    {
+      "id": "tr_01_conversation",
+      "reference_text": "Bugünkü toplantıda yeni proje takvimini konuşacağız.",
+      "category": "conversation",
+      "audio_filename": "local_stt_audio/tr_01_conversation.wav",
+      "record_seconds": 6
+    },
+    {
+      "id": "tr_02_live_translation",
+      "reference_text": "Mikrofonumu açıp gerçek zamanlı çeviriyi deniyorum.",
+      "category": "project vocabulary",
+      "audio_filename": "local_stt_audio/tr_02_live_translation.wav",
+      "record_seconds": 6
+    },
+    {
+      "id": "tr_03_numbers",
+      "reference_text": "Toplam mesafe on iki virgül beş kilometre olarak ölçüldü.",
+      "category": "numbers",
+      "audio_filename": "local_stt_audio/tr_03_numbers.wav",
+      "record_seconds": 7
+    },
+    {
+      "id": "tr_04_date",
+      "reference_text": "Toplantı yirmi üç Eylül iki bin yirmi altı tarihinde yapılacak.",
+      "category": "date",
+      "audio_filename": "local_stt_audio/tr_04_date.wav",
+      "record_seconds": 7
+    },
+    {
+      "id": "tr_05_tunnel",
+      "reference_text": "NATM yöntemiyle açılan tünelde güvenlik kontrolü tamamlandı.",
+      "category": "abbreviation and engineering",
+      "audio_filename": "local_stt_audio/tr_05_tunnel.wav",
+      "record_seconds": 7
+    },
+    {
+      "id": "tr_06_concrete",
+      "reference_text": "Betonarme taşıyıcı sistemin hesapları yeniden gözden geçirildi.",
+      "category": "engineering",
+      "audio_filename": "local_stt_audio/tr_06_concrete.wav",
+      "record_seconds": 7
+    },
+    {
+      "id": "tr_07_apple_silicon",
+      "reference_text": "Yapay zekâ modeli Apple Silicon üzerinde yerel olarak çalışıyor.",
+      "category": "technical mixed language",
+      "audio_filename": "local_stt_audio/tr_07_apple_silicon.wav",
+      "record_seconds": 7
+    },
+    {
+      "id": "tr_08_cuda_metal",
+      "reference_text": "CUDA desteği Windows bilgisayarda, Metal desteği ise Mac üzerinde kullanılacak.",
+      "category": "technical mixed language",
+      "audio_filename": "local_stt_audio/tr_08_cuda_metal.wav",
+      "record_seconds": 8
+    },
+    {
+      "id": "tr_09_short",
+      "reference_text": "Sesim net geliyor mu?",
+      "category": "short utterance",
+      "audio_filename": "local_stt_audio/tr_09_short.wav",
+      "record_seconds": 4
+    },
+    {
+      "id": "tr_10_long",
+      "reference_text": "Ekip, toplantı sırasında mikrofon gecikmesini ölçüp gerçek zamanlı çeviri sonuçlarını dikkatle karşılaştıracak.",
+      "category": "long utterance",
+      "audio_filename": "local_stt_audio/tr_10_long.wav",
+      "record_seconds": 10
+    }
+  ]
+}
