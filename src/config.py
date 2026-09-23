@@ -12,6 +12,17 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
+def _merge_config(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively overlay local configuration without mutating either input."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_config(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class Config:
     """Centralized configuration manager."""
     
@@ -30,6 +41,19 @@ class Config:
         
         with open(self.config_path, 'r', encoding='utf-8') as f:
             self._config = yaml.safe_load(f) or {}
+
+        local_config_path = self.config_path.with_name(
+            f"{self.config_path.stem}.local{self.config_path.suffix}"
+        )
+        if local_config_path.exists():
+            with open(local_config_path, 'r', encoding='utf-8') as f:
+                local_config = yaml.safe_load(f) or {}
+            if not isinstance(local_config, dict):
+                raise ValueError(
+                    f"Local config must contain a mapping: {local_config_path}"
+                )
+            self._config = _merge_config(self._config, local_config)
+            logger.info("Loaded local configuration overlay: %s", local_config_path)
         
         if not self._config:
             logger.warning(

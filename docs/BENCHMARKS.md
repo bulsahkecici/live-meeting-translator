@@ -152,3 +152,32 @@ audio was deleted. This is a routing/integration acceptance, not a quality
 benchmark or a real Zoom call. The final post-mix repeat again produced the
 exact English transcript and the same Turkish translation with 1.326 s total
 segment completion.
+
+### First real Zoom call diagnostic (2026-09-23)
+
+The first real bidirectional meeting was a failed acceptance and is retained as
+diagnostic evidence. Over roughly ten minutes, the outgoing channel accepted
+133 segments even though much of that activity was remote audio leaking from
+the MacBook speakers into the MacBook microphone. Its playback queue reached
+the configured capacity of four. One malformed MLX transcript contained a
+223-character alternating two-character sequence; translation expanded it to
+1,547 characters and produced about 36.1 seconds of synthesized playback. The
+observed end-to-end backlog peaked at approximately 43.9 seconds. Outgoing
+totals were 133 submitted, 131 completed, two failed, zero capture drops, and
+zero overload failures. Incoming totals were 53 submitted, 48 completed, five
+empty-STT failures, and zero capture drops.
+
+The GUI stop request stopped both capture streams immediately, but the outgoing
+path then drained queued playback and finished about 5.9 seconds later; the UI
+did not reliably return to its idle state. Corrective work therefore suppresses
+whole-segment boilerplate and low-diversity repetition in both STT paths, makes
+GUI stop an explicit cancellation that interrupts active playback, and polls
+worker completion before restoring the Start button. The next live acceptance
+must use headphones in the incoming Multi-Output route; it must not reuse the
+built-in speaker plus built-in microphone acoustic path.
+
+An offline replay of the recorded text logs through the corrective filter (no
+audio or cloud call) would suppress 56 of 133 outgoing transcripts and 15 of 48
+non-empty incoming transcripts, including the 223-character repeated sequence.
+These replay counts validate targeting only; they do not constitute a successful
+post-fix live call.

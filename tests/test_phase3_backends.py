@@ -262,6 +262,29 @@ class BackendFactoryTests(unittest.TestCase):
         self.assertEqual(constructor.call_args.kwargs["api_key"], "test-key")
         self.assertEqual(constructor.call_args.kwargs["source_lang"], "TR")
         self.assertEqual(constructor.call_args.kwargs["target_lang"], "EN")
+        self.assertIsNone(constructor.call_args.kwargs["context"])
+        self.assertIsNone(constructor.call_args.kwargs["custom_instructions"])
+
+    def test_deepl_context_and_custom_instructions_are_configuration_driven(self):
+        constructor = Mock(return_value=object())
+        config = FakeConfig(
+            translate={
+                "context": "ExampleName is a personal name.",
+                "custom_instructions": ["Keep ExampleName unchanged."],
+            }
+        )
+
+        with patch("src.backend_factory._load_symbol", return_value=constructor):
+            BackendFactory(config, self.windows).create_translator()
+
+        self.assertEqual(
+            constructor.call_args.kwargs["context"],
+            "ExampleName is a personal name.",
+        )
+        self.assertEqual(
+            constructor.call_args.kwargs["custom_instructions"],
+            ["Keep ExampleName unchanged."],
+        )
 
     def test_invalid_backend_names_fail_explicitly(self):
         with self.assertRaisesRegex(ValueError, "Unknown STT backend: mlx"):

@@ -209,6 +209,8 @@ class BackendFactory:
             retry_backoff=translate_config.get(
                 "retry_backoff", [0.5, 1.0, 2.0, 4.0]
             ),
+            context=translate_config.get("context"),
+            custom_instructions=translate_config.get("custom_instructions"),
         )
 
     def create_tts(self) -> TTSEngine:

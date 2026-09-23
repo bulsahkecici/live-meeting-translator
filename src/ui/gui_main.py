@@ -53,16 +53,23 @@ class PipelineWorker(QThread):
         try:
             self.pipeline = TranslationPipeline(self.config)
             if self._stop_requested.is_set():
-                self.pipeline.stop()
+                self.pipeline.stop(cancel=True)
             self.pipeline.run_live()
         except Exception as exc:
             logging.error("Outgoing pipeline crashed: %s", exc, exc_info=True)
             self.error.emit(str(exc))
 
     def stop(self):
+        if self._stop_requested.is_set():
+            return
         self._stop_requested.set()
         if self.pipeline:
-            self.pipeline.stop()
+            threading.Thread(
+                target=self.pipeline.stop,
+                kwargs={"cancel": True},
+                name="outgoing-pipeline-stop",
+                daemon=True,
+            ).start()
 
 
 class IncomingSubtitleWorker(QThread):
@@ -84,16 +91,23 @@ class IncomingSubtitleWorker(QThread):
                 on_subtitle=self.subtitle.emit,
             )
             if self._stop_requested.is_set():
-                self.pipeline.stop()
+                self.pipeline.stop(cancel=True)
             self.pipeline.run_live()
         except Exception as exc:
             logging.error("Incoming subtitle pipeline crashed: %s", exc, exc_info=True)
             self.error.emit(str(exc))
 
     def stop(self):
+        if self._stop_requested.is_set():
+            return
         self._stop_requested.set()
         if self.pipeline:
-            self.pipeline.stop()
+            threading.Thread(
+                target=self.pipeline.stop,
+                kwargs={"cancel": True},
+                name="incoming-pipeline-stop",
+                daemon=True,
+            ).start()
 
 
 class DirectionCard(QFrame):
@@ -186,6 +200,7 @@ class MainWindow(QMainWindow):
         self.incoming_worker = None
         self._closing = False
         self._stopping = False
+        self._finish_poll_scheduled = False
         self._ready_channels = set()
         self.overlay = SubtitleOverlay()
 
@@ -295,8 +310,24 @@ class MainWindow(QMainWindow):
         self.btn_start = QPushButton("OTURUMU BAŞLAT")
         self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start.setMinimumHeight(54)
+        self.btn_start.setToolTip(
+            "Çeviri oturumunu başlatır veya durdurur; pencere açık kalır."
+        )
         self.btn_start.clicked.connect(self.toggle_start)
         controls.addWidget(self.btn_start, stretch=1)
+
+        self.btn_exit = QPushButton("UYGULAMAYI KAPAT")
+        self.btn_exit.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_exit.setMinimumHeight(54)
+        self.btn_exit.setToolTip("Çeviri oturumunu iptal eder ve pencereyi kapatır.")
+        self.btn_exit.setStyleSheet(
+            "QPushButton { background-color: #273247; color: #D7DEEA; "
+            "border: 1px solid #3A4962; border-radius: 12px; "
+            "font-size: 12px; font-weight: 750; padding: 0 16px; } "
+            "QPushButton:hover { background-color: #34425A; }"
+        )
+        self.btn_exit.clicked.connect(self.request_close)
+        controls.addWidget(self.btn_exit)
 
         self.chk_overlay = QCheckBox("Türkçe altyazıyı ekran üstünde göster")
         self.chk_overlay.setChecked(True)
@@ -364,7 +395,7 @@ class MainWindow(QMainWindow):
 
     def update_button_style(self, running: bool):
         if running:
-            self.btn_start.setText("OTURUMU DURDUR")
+            self.btn_start.setText("OTURUMU DURDUR VE KAPAT")
             self.btn_start.setStyleSheet(
                 "QPushButton { background-color: #E85D75; color: white; "
                 "border: none; border-radius: 12px; font-size: 14px; "
@@ -388,7 +419,7 @@ class MainWindow(QMainWindow):
 
     def toggle_start(self):
         if self._any_worker_running():
-            self.stop_session()
+            self.request_close()
         else:
             self.start_session()
 
@@ -426,13 +457,31 @@ class MainWindow(QMainWindow):
             self.incoming_worker.start()
 
     def stop_session(self):
+        if self._stopping:
+            return
+        logging.info("GUI session stop requested")
         self._stopping = True
         self.btn_start.setEnabled(False)
-        self.btn_start.setText("KUYRUKLAR BOŞALTILIYOR…")
+        self.btn_start.setText("OTURUM İPTAL EDİLİYOR…")
         self.status_indicator.setText("DURDURULUYOR")
         for worker in self._workers():
             if worker.isRunning():
                 worker.stop()
+        self._schedule_finish_poll()
+
+    def request_close(self):
+        """Cancel active work and close once both worker threads have exited."""
+        if self._closing:
+            return
+        logging.info("GUI application close requested")
+        self._closing = True
+        self.btn_exit.setEnabled(False)
+        self.btn_exit.setText("KAPATILIYOR…")
+        if self._any_worker_running():
+            self.stop_session()
+            self._schedule_finish_poll()
+            return
+        self.close()
 
     def on_worker_error(self, message: str):
         self.status_indicator.setText("HATA")
@@ -446,9 +495,19 @@ class MainWindow(QMainWindow):
             self.stop_session()
 
     def on_worker_finished(self):
+        self._schedule_finish_poll()
+
+    def _schedule_finish_poll(self, delay_ms: int = 0):
+        if not self._finish_poll_scheduled:
+            self._finish_poll_scheduled = True
+            QTimer.singleShot(delay_ms, self._finalize_session_if_stopped)
+
+    def _finalize_session_if_stopped(self):
+        self._finish_poll_scheduled = False
         if self._any_worker_running():
             if not self._stopping:
                 self.stop_session()
+            self._schedule_finish_poll(50)
             return
 
         self.update_button_style(False)

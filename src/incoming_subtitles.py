@@ -16,8 +16,11 @@ from .pipeline_runtime import (
     PipelineMessage,
     PipelineRuntime,
 )
+from .stt_filters import should_suppress_stt_text
 
 logger = logging.getLogger(__name__)
+
+_SILENCE_HALLUCINATION_MARKER = "known silence hallucination suppressed"
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,10 @@ class IncomingSubtitlePipeline:
         if not message.source_text:
             logger.warning("Incoming STT returned no text")
             return False
+        if should_suppress_stt_text(message.source_text):
+            message.error = _SILENCE_HALLUCINATION_MARKER
+            logger.info("Suppressed known incoming STT hallucination during silence")
+            return False
         logger.info(
             "Incoming STT result: '%s' (language: en)",
             message.source_text,
@@ -129,6 +136,10 @@ class IncomingSubtitlePipeline:
                 "Incoming translation failed for: '%s'",
                 message.source_text,
             )
+            return False
+        if should_suppress_stt_text(message.translated_text):
+            message.error = _SILENCE_HALLUCINATION_MARKER
+            logger.info("Suppressed known translated hallucination during silence")
             return False
         logger.info(
             "Incoming translation completed for segment %s: '%s'",
@@ -148,6 +159,12 @@ class IncomingSubtitlePipeline:
         )
 
     def _on_failure(self, message: PipelineMessage) -> None:
+        if message.error == _SILENCE_HALLUCINATION_MARKER:
+            logger.info(
+                "Incoming subtitle segment %s suppressed during silence",
+                message.sequence_id,
+            )
+            return
         logger.error(
             "Incoming subtitle segment %s failed: %s",
             message.sequence_id,

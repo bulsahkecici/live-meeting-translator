@@ -180,3 +180,8 @@ class AudioOutput(AudioOutputBackend):
         except Exception as e:
             logger.error(f"Error playing beep: {e}", exc_info=True)
             return False
+
+    def stop_playback(self) -> None:
+        """Interrupt playback started through sounddevice's convenience API."""
+        sd.stop()
+        logger.info("Audio playback stop requested")

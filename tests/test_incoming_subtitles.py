@@ -9,6 +9,8 @@ from src.incoming_subtitles import (
     IncomingSubtitleComponents,
     IncomingSubtitlePipeline,
 )
+from src.pipeline_runtime import PipelineMessage
+from src.stt_filters import should_suppress_stt_text
 
 
 class FakeConfig:
@@ -55,6 +57,75 @@ class FakeAudioInput:
 
 
 class IncomingSubtitlePipelineTests(unittest.TestCase):
+    def test_known_silence_hallucinations_are_narrowly_matched(self):
+        self.assertTrue(
+            should_suppress_stt_text(
+                "Thank you for watching. Subtitles by M.K."
+            )
+        )
+        self.assertTrue(
+            should_suppress_stt_text(
+                "İzlediğiniz için teşekkürler. Altyazı M.K."
+            )
+        )
+        self.assertFalse(
+            should_suppress_stt_text(
+                "Thank you for watching the deployment dashboard."
+            )
+        )
+
+    def test_silence_hallucination_is_not_translated_or_emitted(self):
+        subtitles = []
+        audio_input = FakeAudioInput()
+        vad = Mock()
+        vad.process_audio.side_effect = lambda chunk: b"segment" if chunk else None
+        vad.flush.return_value = None
+        stt = Mock()
+        translator = Mock()
+        components = IncomingSubtitleComponents(
+            audio_input=audio_input,
+            vad=vad,
+            stt=stt,
+            translator=translator,
+        )
+        pipeline = IncomingSubtitlePipeline(
+            FakeConfig(),
+            components=components,
+            on_subtitle=lambda source, target: subtitles.append((source, target)),
+        )
+
+        def transcribe(_audio, _sample_rate):
+            pipeline.stop()
+            return "Thank you for watching. Subtitles by M.K."
+
+        stt.transcribe.side_effect = transcribe
+        pipeline.run_live()
+
+        translator.translate.assert_not_called()
+        self.assertEqual(subtitles, [])
+        self.assertEqual(audio_input.cleared, 0)
+        self.assertEqual(pipeline.runtime_metrics()["failed"], 1)
+
+    def test_translated_silence_hallucination_is_suppressed(self):
+        translator = Mock()
+        translator.translate.return_value = (
+            "İzlediğiniz için teşekkürler. Altyazı M.K."
+        )
+        pipeline = IncomingSubtitlePipeline(
+            FakeConfig(),
+            components=IncomingSubtitleComponents(
+                audio_input=FakeAudioInput(),
+                vad=Mock(),
+                stt=Mock(),
+                translator=translator,
+            ),
+        )
+        message = PipelineMessage(sequence_id=1, audio_bytes=b"segment")
+        message.source_text = "Caption credit M.K."
+
+        self.assertFalse(pipeline._stage_translation(message))
+        self.assertEqual(message.error, "known silence hallucination suppressed")
+
     def test_live_channel_preserves_order_and_emits_reverse_translation(self):
         calls = []
         subtitles = []

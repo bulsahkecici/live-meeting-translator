@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from src.audio_in import AudioInput
+from src.audio_out import AudioOutput
 from src.backend_factory import PipelineComponents
 from src.pipeline import TranslationPipeline
 from src.pipeline_runtime import (
@@ -310,6 +311,16 @@ class CaptureQueueContinuityTests(unittest.TestCase):
         np.testing.assert_array_equal(mixed, [0, 500])
 
 
+class PlaybackCancellationTests(unittest.TestCase):
+    def test_stop_playback_interrupts_sounddevice_convenience_playback(self):
+        audio_output = AudioOutput.__new__(AudioOutput)
+
+        with patch("src.audio_out.sd.stop") as stop:
+            audio_output.stop_playback()
+
+        stop.assert_called_once_with()
+
+
 class TranslationPipelineWorkerTests(unittest.TestCase):
     def _minimal_pipeline(self, tmp_dir):
         components = PipelineComponents(
@@ -340,6 +351,36 @@ class TranslationPipelineWorkerTests(unittest.TestCase):
 
             self.assertFalse(failed_path.exists())
             self.assertFalse(canceled_path.exists())
+
+    def test_cancel_stop_interrupts_active_playback(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pipeline = self._minimal_pipeline(tmp_dir)
+
+            pipeline.stop(cancel=True)
+
+        pipeline.audio_output.stop_playback.assert_called_once_with()
+        self.assertTrue(pipeline._stop_requested.is_set())
+        self.assertTrue(pipeline._cancel_on_stop)
+
+    def test_cancel_stop_survives_playback_interrupt_error(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pipeline = self._minimal_pipeline(tmp_dir)
+            pipeline.audio_output.stop_playback.side_effect = RuntimeError("busy")
+
+            with self.assertLogs("src.pipeline", level="WARNING"):
+                pipeline.stop(cancel=True)
+
+        self.assertTrue(pipeline._stop_requested.is_set())
+
+    def test_outgoing_hallucination_does_not_reach_translation(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pipeline = self._minimal_pipeline(tmp_dir)
+            pipeline.stt.transcribe.return_value = "Altyazı M.K."
+
+            with patch("src.pipeline.NOISE_REDUCE_AVAILABLE", False):
+                self.assertFalse(pipeline.process_segment(b"\x00\x00"))
+
+        pipeline.translator.translate.assert_not_called()
 
     def test_real_stage_adapters_preserve_playback_order_and_clean_temp_files(self):
         played = []

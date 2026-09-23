@@ -71,3 +71,6 @@ class AudioOutputBackend(ABC):
         blocking: bool = True
     ) -> bool:
         """Play a generated beep."""
+
+    def stop_playback(self) -> None:
+        """Interrupt active playback when supported by the backend."""

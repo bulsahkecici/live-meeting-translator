@@ -51,6 +51,11 @@ translate:
   backend: "deepl"  # Current implementation
   source_lang: "TR"
   target_lang: "EN"
+  # Optional short disambiguation context and translation-only instructions.
+  # Put private names in the ignored config.local.yaml, not this shared file.
+  # context: "ExampleName is a personal name."
+  # custom_instructions:
+  #   - "Keep the personal name ExampleName unchanged in English."
   cache_size: 128  # LRU cache entries
   timeout_seconds: 10
   retry_max_attempts: 3

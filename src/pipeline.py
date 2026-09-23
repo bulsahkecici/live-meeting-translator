@@ -15,9 +15,11 @@ from .pipeline_runtime import (
     PipelineMessage,
     PipelineRuntime,
 )
+from .stt_filters import should_suppress_stt_text
 from .utils import get_tmp_dir
 
 logger = logging.getLogger(__name__)
+_STT_HALLUCINATION_MARKER = "known STT hallucination suppressed"
 
 
 class TranslationPipeline:
@@ -118,26 +120,17 @@ class TranslationPipeline:
             logger.warning("STT returned no text, skipping segment")
             return False
 
+        if should_suppress_stt_text(message.source_text):
+            message.error = _STT_HALLUCINATION_MARKER
+            logger.info("Suppressed known outgoing STT hallucination")
+            return False
+
         logger.info(
             "Outgoing STT completed for segment %s: '%s'",
             message.sequence_id,
             message.source_text,
         )
 
-        common_false_positives = [
-            "videoyu izlediğiniz için teşekkürler",
-            "videoyu izlediğiniz için",
-            "thank you for watching",
-            "bir sonraki videoda görüşürüz",
-        ]
-        tr_lower = message.source_text.lower()
-        for phrase in common_false_positives:
-            if phrase in tr_lower:
-                logger.warning(
-                    f"STT detected common phrase '{phrase}' - "
-                    "This might be a false positive from background audio. "
-                    "Please verify if you actually said this."
-                )
         return True
 
     def _stage_translation(self, message: PipelineMessage) -> bool:
@@ -198,6 +191,10 @@ class TranslationPipeline:
         self._cleanup_message(message)
 
     def _on_message_failure(self, message: PipelineMessage) -> None:
+        if message.error == _STT_HALLUCINATION_MARKER:
+            logger.info("Outgoing segment %s suppressed", message.sequence_id)
+            self._cleanup_message(message)
+            return
         logger.error(
             "Segment %s failed without blocking later segments: %s",
             message.sequence_id,
@@ -321,6 +318,13 @@ class TranslationPipeline:
         self._cancel_on_stop = cancel
         self._stop_requested.set()
         self._running = False
+        if cancel:
+            stop_playback = getattr(self.audio_output, "stop_playback", None)
+            if callable(stop_playback):
+                try:
+                    stop_playback()
+                except Exception as exc:
+                    logger.warning("Could not interrupt active playback: %s", exc)
         logger.info("Stopping pipeline requested (cancel=%s)...", cancel)
 
     def run_dryrun(self, text: str):

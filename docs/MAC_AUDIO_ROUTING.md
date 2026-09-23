@@ -35,9 +35,13 @@ Zoom speaker -> Zoom Incoming Monitor (Multi-Output)
     +-> BlackHole 16ch -> EN STT -> TR translation -> GUI/overlay only
 ```
 
-`Zoom Incoming Monitor` contains MacBook Pro Hoparlörü as its primary device and
-BlackHole 16ch with drift correction. BlackHole 2ch is deliberately excluded.
-The incoming pipeline has no playback or TTS stage.
+The verified baseline `Zoom Incoming Monitor` contains MacBook Pro Hoparlörü as
+its primary device and BlackHole 16ch with drift correction. BlackHole 2ch is
+deliberately excluded. That speaker-based layout is suitable for bounded route
+diagnostics, but a real two-way meeting should replace the audible member with
+wired headphones or a stable headset output. Otherwise remote speech can leak
+into the MacBook microphone and enter the outgoing translation path. The
+incoming pipeline has no playback or TTS stage.
 
 ## Safe usage
 
@@ -84,11 +88,17 @@ Zoom microphone = BlackHole 2ch
 Zoom speaker = Zoom Incoming Monitor
 ```
 
+Re-check both selections inside every active meeting. Zoom can restore an
+earlier or system-default device. A wrong speaker selection leaves the incoming
+pipeline at zero submitted segments; a wrong microphone selection bypasses the
+translated English output.
+
 Never select BlackHole 2ch as the Zoom speaker: that sends the remote
 participant back into Zoom's microphone path. Do not add BlackHole 2ch to the
-Multi-Output device. Headphones remain preferable when feedback from the
-physical room is possible. The repository does not join meetings or transmit
-audio to another person automatically.
+Multi-Output device. Headphones are required for the next live acceptance
+because the first real meeting showed acoustic pickup with the built-in speaker
+route. The repository does not join meetings or transmit audio to another
+person automatically.
 
 ## Troubleshooting
 

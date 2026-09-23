@@ -24,6 +24,46 @@ class DeepLTranslatorTests(unittest.TestCase):
         )
         self.assertNotIn("auth_key", request["data"])
         self.assertEqual(request["data"]["text"], "Merhaba")
+        self.assertNotIn("context", request["data"])
+        self.assertNotIn("custom_instructions", request["data"])
+
+    def test_context_and_name_instruction_are_sent_without_transcript_history(self):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "translations": [{"text": "The person's name is ExampleName."}],
+        }
+        translator = DeepLTranslator(
+            api_key="test-secret",
+            context="ExampleName is a personal name.",
+            custom_instructions=["Keep the personal name ExampleName unchanged."],
+        )
+
+        with patch("src.translate_deepl.requests.post", return_value=response) as post:
+            result = translator.translate("Kişinin adı ExampleName.")
+
+        self.assertEqual(result, "The person's name is ExampleName.")
+        request_data = post.call_args.kwargs["data"]
+        self.assertEqual(
+            request_data["context"],
+            "ExampleName is a personal name.",
+        )
+        self.assertEqual(
+            request_data["custom_instructions"],
+            ["Keep the personal name ExampleName unchanged."],
+        )
+        self.assertNotIn("history", request_data)
+
+    def test_invalid_custom_instruction_limits_fail_before_api_use(self):
+        with self.assertRaisesRegex(ValueError, "at most 10"):
+            DeepLTranslator(
+                api_key="test-secret",
+                custom_instructions=["instruction"] * 11,
+            )
+        with self.assertRaisesRegex(ValueError, "at most 300"):
+            DeepLTranslator(
+                api_key="test-secret",
+                custom_instructions=["x" * 301],
+            )
 
 
 if __name__ == "__main__":

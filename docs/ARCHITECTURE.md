@@ -45,9 +45,13 @@ flowchart TD
 GUI mode can additionally start `IncomingSubtitlePipeline`. It captures only
 the conference-output loop from BlackHole 16ch, segments it independently,
 runs English Faster Whisper and EN-to-TR DeepL workers, and emits subtitle pairs
-to Qt. This channel has no TTS or audio output, so it cannot feed remote speech
-back to Zoom. The two paths use distinct virtual devices: BlackHole 2ch for the
-outgoing Zoom microphone and BlackHole 16ch for incoming subtitles.
+to Qt. A shared narrow STT filter suppresses whole-segment Whisper boilerplate
+such as “Thank you”/“Subtitles by M.K.” and low-diversity repeated-character or
+repeated-word output before either pipeline reaches translation. Normal
+sentences that merely contain one of those phrases remain intact. This channel
+has no TTS or audio output, so it cannot feed remote speech back to Zoom. The
+two paths use distinct virtual devices: BlackHole 2ch for the outgoing Zoom
+microphone and BlackHole 16ch for incoming subtitles.
 
 In live mode, PortAudio invokes the `AudioInput` callback and enqueues PCM chunks. The pipeline loop continuously reads chunks, passes them to `VAD`, and submits completed segments to `PipelineRuntime`. One worker per stage preserves FIFO order while allowing different segments to occupy STT, translation, TTS, and playback concurrently. `process_segment()` remains as a synchronous compatibility path for direct callers and deterministic tests.
 
@@ -106,7 +110,7 @@ Whisper or changes the model identifier.
 
 ### Translation
 
-`TranslatorBackend` defines only `translate(text)`. The current `DeepLTranslator` implementation posts text to the DeepL Free endpoint and sends the API key only through the required `Authorization: DeepL-Auth-Key ...` header. It retries timeouts, rate limits, and server failures with backoff, and caches translations in memory. Separate instances use TR-to-EN for outgoing speech and EN-to-TR for incoming subtitles. The factory, rather than either pipeline, selects them and refuses to construct them without `DEEPL_API_KEY`.
+`TranslatorBackend` defines only `translate(text)`. The current `DeepLTranslator` implementation posts text to the DeepL Free endpoint and sends the API key only through the required `Authorization: DeepL-Auth-Key ...` header. Optional configuration-driven DeepL context and custom instructions can disambiguate explicitly named people or domain terms without sending transcript history. They are part of the translation cache key. Private terms belong only in the ignored local configuration; the checked-in example contains placeholders. The translator retries timeouts, rate limits, and server failures with backoff, and caches translations in memory. Separate instances use TR-to-EN for outgoing speech and EN-to-TR for incoming subtitles. The factory, rather than either pipeline, selects them and refuses to construct them without `DEEPL_API_KEY`.
 
 ### TTS
 
@@ -118,7 +122,7 @@ TTS retains the existing `TTSEngine` abstract base; no redundant TTS interface w
 
 ### GUI
 
-`gui_main.py` presents separate outgoing and incoming transcript cards, explicit route labels, one session control, a compact event log, and an optional always-on-top incoming Turkish subtitle overlay. Outgoing audio and incoming subtitles run in separate `QThread` owners. Incoming subtitle pairs use a Qt signal rather than log parsing; outgoing card updates consume channel-qualified pipeline log events. Stop requests both channels without blocking the Qt event loop while bounded queues drain.
+`gui_main.py` presents separate outgoing and incoming transcript cards, explicit route labels, a primary start/stop-and-close control, a dedicated idle exit control, a compact event log, and an optional always-on-top incoming Turkish subtitle overlay. Outgoing audio and incoming subtitles run in separate `QThread` owners. Incoming subtitle pairs use a Qt signal rather than log parsing; outgoing card updates consume channel-qualified pipeline log events. Stop requests are dispatched outside the Qt event loop, and the GUI polls both worker states until cancellation completes so a blocking audio stop cannot freeze the window. While live, the primary control explicitly cancels active work and closes after both workers finish.
 
 ### Configuration
 
@@ -134,7 +138,7 @@ Component initialization generally raises to `main.py`, which logs and exits. Ru
 - The capture queue and all four stage queues are bounded.
 - A single worker per stage preserves sequence order; stages can overlap across different segments.
 - Backpressure blocks between internal stages. Ingress saturation stops capture visibly after a configurable timeout; the rejected current segment is retried during bounded shutdown drain before the sentinel, so accepted speech is not evicted.
-- Normal stop drains; `stop(cancel=True)` visibly cancels queued work. Queue depth/high-water, stage totals/counts, completion/failure/cancel counts, and last end-to-end latency are observable through `runtime_metrics()` and final logs.
+- Normal programmatic stop drains; the GUI Stop action uses `stop(cancel=True)`, interrupts active sounddevice playback, and visibly cancels queued work so a stale playback backlog cannot hold the interface open. Queue depth/high-water, stage totals/counts, completion/failure/cancel counts, and last end-to-end latency are observable through `runtime_metrics()` and final logs.
 - GUI mode still owns `run_live()` in one `QThread`; the four pipeline workers run beneath it, blocking playback no longer blocks capture/VAD consumption, and the stop button requests shutdown without blocking the Qt event loop.
 - When incoming subtitles are enabled, a second QThread owns its capture loop and two bounded workers; outgoing and incoming queue metrics remain separate.
 

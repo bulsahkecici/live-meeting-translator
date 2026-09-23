@@ -74,6 +74,10 @@ ignored local `.env` file; never commit or paste it into logs:
 DEEPL_API_KEY=your_actual_deepl_api_key_here
 ```
 
+Put private translation context, such as personal names or company terminology,
+in the ignored `config.local.yaml`. Its keys recursively override `config.yaml`
+on this machine without changing the shared deployment profile.
+
 The remaining installation instructions describe the preserved Windows path.
 
 For the primary Mac profile, set Zoom devices to:
@@ -83,9 +87,12 @@ Microphone: BlackHole 2ch
 Speaker: Zoom Incoming Monitor
 ```
 
-The Multi-Output device lets you hear the remote participant through the
-MacBook speakers while BlackHole 16ch provides the separate subtitle input.
-Never use BlackHole 2ch as the Zoom speaker.
+The Multi-Output device lets you hear the remote participant while BlackHole
+16ch provides the separate subtitle input. For a real two-way call, use wired
+headphones or a stable headset output as the audible member of the Multi-Output
+device. MacBook speakers can leak remote speech back into the MacBook microphone,
+creating false outgoing translations, long playback queues, and echo. Never use
+BlackHole 2ch as the Zoom speaker.
 
 ### Data handling
 
@@ -290,6 +297,9 @@ Microphone → TR STT → EN translation → SAPI/Edge TTS
 - **Use headphones/headset** to prevent feedback loops
 - On macOS, do **not** set the Zoom speaker to BlackHole 2ch or add BlackHole
   2ch to `Zoom Incoming Monitor`.
+- Do not use the built-in MacBook speakers for a real two-way session unless
+  acoustic pickup has been explicitly tested. Prefer headphones in the
+  `Zoom Incoming Monitor` Multi-Output device.
 - On Windows, do **not** set the Zoom speaker to VB-CABLE.
 - See [`docs/MAC_AUDIO_ROUTING.md`](docs/MAC_AUDIO_ROUTING.md) for the verified
   Mac topology and feedback-loop precautions.
@@ -417,9 +427,12 @@ output resolves to `BlackHole 2ch`, and the Zoom microphone meter moves during
 
 ### No incoming Turkish subtitles on macOS
 
-1. Verify Zoom's speaker is `Zoom Incoming Monitor`.
-2. Verify that the Multi-Output device contains MacBook speakers (primary) and
-   BlackHole 16ch with drift correction, but does not contain BlackHole 2ch.
+1. Re-check the active meeting's devices because Zoom can restore an earlier
+   selection: microphone must be `BlackHole 2ch` and speaker must be
+   `Zoom Incoming Monitor`.
+2. Verify that the Multi-Output device contains headphones (primary) and
+   BlackHole 16ch with drift correction, but does not contain BlackHole 2ch or
+   MacBook Pro Hoparlörü.
 3. Run `python -m src.main --mode list-devices` and confirm BlackHole 16ch is
    available as an input.
 4. Confirm `incoming_subtitles.enabled: true` and its input device is
